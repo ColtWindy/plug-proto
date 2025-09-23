@@ -20,6 +20,11 @@ plug-proto/
 ```
 
 ## 설치 및 실행
+### 0. 환경 설정
+QT에서 PySide6 사용시 다음 `libxcb-cursor0`가 필요함
+```bash
+sudo apt update && sudo apt install -y libxcb-cursor0
+```
 
 ### 1. 의존성 설치
 ```bash
