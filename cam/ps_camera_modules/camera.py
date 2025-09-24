@@ -35,8 +35,8 @@ class CameraController:
             mvsdk.CameraSetIspOutFormat(self.hCamera, mvsdk.CAMERA_MEDIA_TYPE_BGR8)
             mvsdk.CameraSetTriggerMode(self.hCamera, 1)  # 수동 트리거 모드
             mvsdk.CameraSetAeState(self.hCamera, 1)  # 자동 노출 활성화
-            # 자동 노출 최대값 제한 (33ms = 33000 마이크로초)
-            mvsdk.CameraSetAeExposureRange(self.hCamera, 100, 33000)  # 최소 0.1ms, 최대 33ms
+            # 자동 노출 최대값 제한 (16.67ms = 16670 마이크로초, 60fps 기준)
+            mvsdk.CameraSetAeExposureRange(self.hCamera, 100, 16670)  # 최소 0.1ms, 최대 16.67ms
             mvsdk.CameraSetAnalogGain(self.hCamera, 0)
             
             # 프레임 속도 설정 (0: 저속, 1: 일반, 2: 고속)
