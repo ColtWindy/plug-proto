@@ -48,6 +48,7 @@ class App:
         else:
             self.cycle_start_time = time.time() * 1000000
         self.last_captured_frame = None
+        self.black_frame_counter = 0  # 검은 화면 카운터
         
         self.setup_connections()
         self.setup_camera()
@@ -137,6 +138,7 @@ class App:
                     self.ui.update_camera_frame(self.last_captured_frame)
             else:
                 # 검은 화면 표시 및 카메라 트리거
+                self.black_frame_counter += 1
                 self.show_black_screen()
                 mvsdk.CameraSoftTrigger(self.camera.hCamera)
         
@@ -148,9 +150,23 @@ class App:
                 self.cycle_start_time = current_time
     
     def show_black_screen(self):
-        """검은 화면 표시"""
+        """검은 화면에 숫자 표시"""
         # 640x480 검은 이미지 생성
         black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # 중앙에 흰색 숫자 표시
+        text = str(self.black_frame_counter)
+        font_scale = 4
+        thickness = 4
+        
+        # 텍스트 크기 계산
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+        text_x = (black_frame.shape[1] - text_size[0]) // 2
+        text_y = (black_frame.shape[0] + text_size[1]) // 2
+        
+        # 흰색 텍스트 그리기
+        cv2.putText(black_frame, text, (text_x, text_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
         
         # QImage로 변환
         height, width, channel = black_frame.shape
