@@ -49,6 +49,8 @@ class App:
             self.cycle_start_time = time.time() * 1000000
         self.last_captured_frame = None
         self.black_frame_counter = 0  # 검은 화면 카운터
+        self.last_trigger_time = 0  # 마지막 트리거 시간
+        self.black_screen_updated = False  # 검은 화면 업데이트 플래그
         
         self.setup_connections()
         self.setup_camera()
@@ -132,15 +134,18 @@ class App:
                 # 한 프레임 시간이 지나면 카메라 화면으로 전환
                 self.display_state = 'camera'
                 self.cycle_start_time = current_time
+                self.black_screen_updated = False
                 
                 # 캡처된 프레임이 있으면 표시
                 if self.last_captured_frame:
                     self.ui.update_camera_frame(self.last_captured_frame)
             else:
-                # 검은 화면 표시 및 카메라 트리거
-                self.black_frame_counter += 1
-                self.show_black_screen()
-                mvsdk.CameraSoftTrigger(self.camera.hCamera)
+                # 검은 화면 표시 및 카메라 트리거 (한 번만)
+                if not self.black_screen_updated:
+                    self.black_frame_counter += 1
+                    self.show_black_screen()
+                    mvsdk.CameraSoftTrigger(self.camera.hCamera)
+                    self.black_screen_updated = True
         
         elif self.display_state == 'camera':
             # 카메라 화면 표시 중
@@ -148,6 +153,7 @@ class App:
                 # 한 프레임 시간이 지나면 검은 화면으로 전환
                 self.display_state = 'black'
                 self.cycle_start_time = current_time
+                self.black_screen_updated = False
     
     def show_black_screen(self):
         """검은 화면에 숫자 표시"""
