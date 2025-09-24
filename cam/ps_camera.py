@@ -30,17 +30,12 @@ class App:
     def setup_connections(self):
         """UI 연결"""
         self.ui.info_button.clicked.connect(self.ui.toggle_info)
-        self.ui.exposure_mode_button.clicked.connect(self.toggle_exposure_mode)
-        self.ui.fps_15_button.clicked.connect(lambda: self.set_fps_mode("15"))
-        self.ui.fps_30_button.clicked.connect(lambda: self.set_fps_mode("30"))
-        self.ui.fps_60_button.clicked.connect(lambda: self.set_fps_mode("60"))
-        self.ui.fps_auto_button.clicked.connect(lambda: self.set_fps_mode("Auto"))
-        self.ui.exposure_slider.valueChanged.connect(self.on_exposure_change)
         self.ui.gain_slider.valueChanged.connect(self.on_gain_change)
         
-        # FPS 타이머 초기화
+        # 30fps 트리거 타이머 초기화
         self.fps_timer = QTimer()
         self.fps_timer.timeout.connect(self.trigger_frame)
+        self.fps_timer.start(33)  # 30fps (1000ms / 30 = 33.33ms)
     
     def setup_camera(self):
         """카메라 설정"""
@@ -53,10 +48,8 @@ class App:
         self.camera.set_frame_callback(self.on_new_frame)
         
         # 초기 UI 값 설정
-        exposure_ms = self.camera.get_exposure_ms()
         gain_value = self.camera.get_gain()
-        self.ui.set_slider_values(exposure_ms, gain_value)
-        self.ui.update_exposure_display(exposure_ms)
+        self.ui.set_slider_values(gain_value)
         self.ui.update_gain_display(gain_value)
     
     def on_new_frame(self, q_image):
@@ -64,11 +57,9 @@ class App:
         self.ui.update_camera_frame(q_image)
         self.calculate_fps()
         
-        # 자동 노출 모드에서 실시간 값 업데이트
-        if not self.ui.manual_exposure:
-            exposure_ms = self.camera.get_exposure_ms()
-            self.ui.update_exposure_display(exposure_ms, is_auto=True)
-            self.camera.camera_info['exposure'] = int(exposure_ms)
+        # 자동 노출 모드 실시간 값 업데이트
+        exposure_ms = self.camera.get_exposure_ms()
+        self.camera.camera_info['exposure'] = int(exposure_ms)
         
         # FPS를 camera_info에 추가
         self.camera.camera_info['fps'] = self.fps
@@ -85,51 +76,14 @@ class App:
             self.frame_count = 0
             self.last_time = current_time
     
-    def on_exposure_change(self, value):
-        """노출시간 슬라이더 변경"""
-        self.camera.set_exposure(value)
-        self.ui.update_exposure_display(value)
     
     def on_gain_change(self, value):
         """게인 슬라이더 변경"""
         self.camera.set_gain(value)
         self.ui.update_gain_display(value)
     
-    def toggle_exposure_mode(self):
-        """노출 모드 토글"""
-        manual_mode = self.ui.toggle_exposure_mode()
-        self.camera.set_exposure_mode(manual_mode)
-        
-        if manual_mode:
-            # 자동→수동 전환: 현재 노출시간을 슬라이더에 반영
-            exposure_ms = self.camera.get_exposure_ms()
-            
-            # 슬라이더 범위 제한
-            exposure_ms = max(1, min(100, int(exposure_ms)))
-            
-            # UI 업데이트 (시그널 차단하여 중복 호출 방지)
-            self.ui.exposure_slider.blockSignals(True)
-            self.ui.exposure_slider.setValue(exposure_ms)
-            self.ui.exposure_slider.blockSignals(False)
-            
-            self.camera.set_exposure(exposure_ms)
-            self.ui.update_exposure_display(exposure_ms)
-    
-    def set_fps_mode(self, fps_mode):
-        """FPS 모드 설정"""
-        self.ui.set_fps_mode(fps_mode)
-        camera_fps_mode = self.camera.set_fps_mode(fps_mode)
-        
-        # FPS 타이머 설정
-        if fps_mode == "Auto":
-            self.fps_timer.stop()
-        else:
-            target_fps = int(fps_mode)
-            interval_ms = 1000 // target_fps
-            self.fps_timer.start(interval_ms)
-    
     def trigger_frame(self):
-        """정해진 FPS로 트리거"""
+        """30fps 트리거"""
         mvsdk.CameraSoftTrigger(self.camera.hCamera)
      
     def show(self):

@@ -33,9 +33,10 @@ class CameraController:
             cap = mvsdk.CameraGetCapability(self.hCamera)
             
             mvsdk.CameraSetIspOutFormat(self.hCamera, mvsdk.CAMERA_MEDIA_TYPE_BGR8)
-            mvsdk.CameraSetTriggerMode(self.hCamera, 0)
-            mvsdk.CameraSetAeState(self.hCamera, 0)
-            mvsdk.CameraSetExposureTime(self.hCamera, 30 * 1000)
+            mvsdk.CameraSetTriggerMode(self.hCamera, 1)  # 수동 트리거 모드
+            mvsdk.CameraSetAeState(self.hCamera, 1)  # 자동 노출 활성화
+            # 자동 노출 최대값 제한 (33ms = 33000 마이크로초)
+            mvsdk.CameraSetAeExposureRange(self.hCamera, 100, 33000)  # 최소 0.1ms, 최대 33ms
             mvsdk.CameraSetAnalogGain(self.hCamera, 0)
             
             # 프레임 속도 설정 (0: 저속, 1: 일반, 2: 고속)
@@ -89,10 +90,6 @@ class CameraController:
         if self.frame_callback:
             self.frame_callback(q_image)
     
-    def set_exposure(self, value_ms):
-        """노출시간 설정"""
-        mvsdk.CameraSetExposureTime(self.hCamera, int(value_ms * 1000))
-        self.camera_info['exposure'] = value_ms
     
     def set_gain(self, value):
         """게인 설정"""
@@ -107,33 +104,8 @@ class CameraController:
         """현재 게인"""
         return mvsdk.CameraGetAnalogGain(self.hCamera)
     
-    def set_exposure_mode(self, manual_mode):
-        """노출 모드 설정 (True: 수동, False: 자동)"""
-        if manual_mode:
-            mvsdk.CameraSetAeState(self.hCamera, 0)
-            print("수동 노출 모드로 설정")
-        else:
-            mvsdk.CameraSetAeState(self.hCamera, 1)
-            print("자동 노출 모드로 설정")
     
-    def set_fps_mode(self, fps):
-        """FPS 모드 설정"""
-        if fps == "Auto":
-            mvsdk.CameraSetTriggerMode(self.hCamera, 0)  # 자동 연속
-            print("자동 FPS 모드")
-        else:
-            mvsdk.CameraSetTriggerMode(self.hCamera, 1)  # 수동 트리거
-            print(f"{fps} FPS 모드로 설정")
-        return fps
     
-    def set_frame_speed(self, speed_mode):
-        """프레임 속도 설정 (0: 저속, 1: 일반, 2: 고속)"""
-        mvsdk.CameraSetFrameSpeed(self.hCamera, speed_mode)
-        print(f"프레임 속도 모드: {speed_mode} (0:저속, 1:일반, 2:고속)")
-    
-    def get_frame_speed(self):
-        """현재 프레임 속도 모드 가져오기"""
-        return mvsdk.CameraGetFrameSpeed(self.hCamera)
     
     
     def cleanup(self):
