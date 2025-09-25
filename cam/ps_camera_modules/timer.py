@@ -68,24 +68,33 @@ class VSyncFrameTimer(QObject):
         
         def frame_loop():
             while self.is_running:
-                self.frame_number += 1
-                
-                # 절대 시간 기준 다음 프레임 시점 계산 (누적 드리프트 방지)
-                target_time = self.start_time + (self.frame_number * self.frame_interval_ns)
-                
-                # 정밀 대기
-                while True:
-                    current_time = time.time_ns()
-                    remaining = target_time - current_time
+                try:
+                    self.frame_number += 1
                     
-                    if remaining <= 0:
-                        break
+                    # 절대 시간 기준 다음 프레임 시점 계산 (누적 드리프트 방지)
+                    target_time = self.start_time + (self.frame_number * self.frame_interval_ns)
+                    
+                    # 정밀 대기
+                    while True:
+                        current_time = time.time_ns()
+                        remaining = target_time - current_time
                         
-                    if remaining > 1000000:  # 1ms 이상
-                        time.sleep((remaining - 500000) / 1000000000.0)
-                
-                # 스레드 안전 프레임 신호 발생
-                self.frame_signal.emit(self.frame_number)
+                        if remaining <= 0:
+                            break
+                            
+                        if remaining > 1000000:  # 1ms 이상
+                            time.sleep((remaining - 500000) / 1000000000.0)
+                    
+                    # 스레드 안전 프레임 신호 발생
+                    if self.is_running:  # 삭제 체크
+                        self.frame_signal.emit(self.frame_number)
+                        
+                except RuntimeError:
+                    # 객체 삭제시 안전하게 종료
+                    break
+                except Exception as e:
+                    print(f"프레임 루프 오류: {e}")
+                    break
         
         self.timer_thread = threading.Thread(target=frame_loop, daemon=True)
         self.timer_thread.start()

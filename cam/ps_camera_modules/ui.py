@@ -4,6 +4,66 @@ from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout,
                               QWidget, QLabel, QSlider, QPushButton)
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from OpenGL.GL import *
+import numpy as np
+
+class FastOpenGLWidget(QOpenGLWidget):
+    """최소 딜레이 OpenGL 렌더링 위젯"""
+    
+    def __init__(self):
+        super().__init__()
+        self.frame_data = None
+        self.texture_id = 0
+        self.is_black = True
+        
+    def initializeGL(self):
+        """OpenGL 초기화"""
+        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glEnable(GL_TEXTURE_2D)
+        
+        # 텍스처 생성
+        self.texture_id = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.texture_id)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        
+    def paintGL(self):
+        """OpenGL 렌더링 (최소 딜레이)"""
+        glClear(GL_COLOR_BUFFER_BIT)
+        
+        if self.is_black:
+            # 검은 화면 (즉시 렌더링)
+            glClearColor(0.0, 0.0, 0.0, 1.0)
+        elif self.frame_data is not None:
+            # 텍스처 업데이트 및 렌더링
+            glBindTexture(GL_TEXTURE_2D, self.texture_id)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 640, 480, 0, GL_RGB, GL_UNSIGNED_BYTE, self.frame_data)
+            
+            # 전체 화면에 텍스처 렌더링
+            glBegin(GL_QUADS)
+            glTexCoord2f(0.0, 1.0); glVertex2f(-1.0, -1.0)
+            glTexCoord2f(1.0, 1.0); glVertex2f(1.0, -1.0)
+            glTexCoord2f(1.0, 0.0); glVertex2f(1.0, 1.0)
+            glTexCoord2f(0.0, 0.0); glVertex2f(-1.0, 1.0)
+            glEnd()
+            
+    def update_frame(self, q_image):
+        """프레임 업데이트 (즉시 반영)"""
+        if q_image and not q_image.isNull():
+            # QImage → OpenGL 텍스처 데이터 변환
+            width, height = q_image.width(), q_image.height()
+            ptr = q_image.bits()
+            
+            if ptr and width == 640 and height == 480:
+                self.frame_data = np.frombuffer(ptr, dtype=np.uint8).reshape(height, width, 3)
+                self.is_black = False
+            else:
+                self.is_black = True
+        else:
+            self.is_black = True
+            
+        self.update()  # 즉시 다시 그리기
 
 class PSCameraUI(QMainWindow):
     def __init__(self):
@@ -20,12 +80,10 @@ class PSCameraUI(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # 카메라 화면
-        self.camera_label = QLabel("카메라 연결 중...")
-        self.camera_label.setFixedSize(640, 480)
-        self.camera_label.setAlignment(Qt.AlignCenter)
-        self.camera_label.setStyleSheet("border: 1px solid gray; background: black; color: white;")
-        layout.addWidget(self.camera_label)
+        # OpenGL 카메라 화면 (최소 딜레이)
+        self.gl_widget = FastOpenGLWidget()
+        self.gl_widget.setFixedSize(640, 480)
+        layout.addWidget(self.gl_widget)
         
         # 정보 패널
         self.info_widget = QWidget()
@@ -81,10 +139,8 @@ class PSCameraUI(QMainWindow):
         
     
     def update_camera_frame(self, q_image):
-        """카메라 프레임 업데이트"""
-        if q_image:
-            pixmap = QPixmap.fromImage(q_image)
-            self.camera_label.setPixmap(pixmap)
+        """카메라 프레임 업데이트 (OpenGL 직접 렌더링)"""
+        self.gl_widget.update_frame(q_image)
     
     def update_info_panel(self, camera_info):
         """정보 패널 업데이트"""

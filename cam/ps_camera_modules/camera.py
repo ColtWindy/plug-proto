@@ -80,10 +80,23 @@ class CameraController:
             if FrameHead.uBytes == 0:
                 return
             
-            # OpenCV 이미지로 변환
+            # OpenCV 이미지로 변환 (안전한 크기 계산)
             frame_data = (mvsdk.c_ubyte * FrameHead.uBytes).from_address(self.pFrameBuffer)
             frame = np.frombuffer(frame_data, dtype=np.uint8)
-            frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth, 3))
+            
+            # 실제 채널 수 계산
+            total_pixels = FrameHead.iHeight * FrameHead.iWidth
+            if len(frame) == total_pixels * 3:
+                # 3채널 (BGR)
+                frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth, 3))
+            elif len(frame) == total_pixels:
+                # 1채널 (Grayscale) → 3채널로 변환
+                frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth))
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+            else:
+                print(f"지원하지 않는 프레임 형식: {len(frame)} bytes")
+                return
+                
             frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
             
             # 안전한 QImage 변환

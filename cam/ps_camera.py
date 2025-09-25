@@ -20,8 +20,8 @@ os.environ['DISPLAY'] = ':0'
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 1      # 화면 그리기 딜레이 보정 (1-10ms)
-EXPOSURE_REDUCTION_MS = 0  # 노출시간 단축 (0-10ms)
+VSYNC_DELAY_MS = 1     # 화면 그리기 딜레이 보정 (1-10ms)
+EXPOSURE_REDUCTION_MS = 8  # 노출시간 단축 (0-10ms)
 
 class App:
     def __init__(self):
@@ -87,25 +87,23 @@ class App:
         self.ui.update_info_panel(self.camera.camera_info)
     
     def on_frame_signal(self, frame_number):
-        """VSync 동기화 프레임 신호 콜백 (메인 스레드에서 안전 실행)"""
-        # VSync 딜레이 보정 (상수값, 누적 드리프트 방지)
-        if self.vsync_delay_ms > 1:  # 1ms 초과시만 대기
-            delay_ns = self.vsync_delay_ms * 1000000
-            target_time = time.time_ns() + delay_ns
-            
-            while time.time_ns() < target_time:
-                pass  # 정밀 대기
-        
-        # VSync 동기화 상태 전환 (60Hz 기준)
+        """VSync 동기화 프레임 신호 콜백 (사이클 타이밍 보존)"""
+        # VSync 동기화 상태 전환 (사이클 타이밍 영향 없음)
         if frame_number % 2 == 1:  # 홀수 프레임
-            # 검은 화면 + 카메라 트리거
+            # 검은 화면 + 카메라 트리거 (즉시 처리)
             self.black_frame_counter += 1
             self.show_black_screen()
             if self.camera.hCamera:
                 mvsdk.CameraSoftTrigger(self.camera.hCamera)
+                
         else:  # 짝수 프레임
-            # 캡처된 프레임 표시
-            if self.last_captured_frame:
+            # 딜레이 보정 후 프레임 표시 (표시만 지연, 사이클은 유지)
+            if self.last_captured_frame and self.vsync_delay_ms > 0:
+                # 비동기 딜레이 (VSync 사이클 방해 안함)
+                QTimer.singleShot(self.vsync_delay_ms, 
+                    lambda: self.ui.update_camera_frame(self.last_captured_frame))
+            elif self.last_captured_frame:
+                # 즉시 표시
                 self.ui.update_camera_frame(self.last_captured_frame)
     
     
@@ -127,16 +125,9 @@ class App:
         self.camera.set_exposure_range(adjusted_max_exposure_us)
     
     def show_black_screen(self):
-        """검은 화면 표시"""
-        # 640x480 검은 이미지 생성
-        black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        
-        # QImage로 변환
-        height, width, channel = black_frame.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(black_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        
-        self.ui.update_camera_frame(q_image)
+        """검은 화면 표시 (OpenGL 즉시 렌더링)"""
+        self.ui.gl_widget.is_black = True
+        self.ui.gl_widget.update()  # 즉시 OpenGL 렌더링
     
     def add_number_to_frame(self, q_image):
         """캡처된 프레임에 숫자 추가 (안전한 방식)"""
@@ -176,8 +167,10 @@ class App:
     
     def cleanup(self):
         """정리"""
-        self.timer.stop()
-        self.camera.cleanup()
+        if hasattr(self, 'timer'):
+            self.timer.stop()
+        if hasattr(self, 'camera'):
+            self.camera.cleanup()
 
 def main():
     app = QApplication(sys.argv)
