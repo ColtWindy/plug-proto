@@ -40,8 +40,9 @@ class App:
             self.last_time = time.time() * 1000000
         self.fps = 0
         
-        # 60fps 타이밍 제어용
-        self.frame_duration_us = 16667  # 60fps = 16.67ms = 16667 마이크로초
+        # 30fps 타이밍 제어용 (각 프레임은 60fps 기준 16.67ms 표시)
+        self.frame_duration_us = 16667  # 각 프레임 표시 시간: 16.67ms (60fps 기준)
+        self.cycle_duration_us = 33333  # 전체 사이클 시간: 33.33ms (30fps 기준)
         self.display_state = 'black'  # 'black' 또는 'camera'
         if TIMER_AVAILABLE:
             self.cycle_start_time = timer_module.get_hardware_timer()
@@ -51,6 +52,8 @@ class App:
         self.black_frame_counter = 0  # 검은 화면 카운터
         self.last_trigger_time = 0  # 마지막 트리거 시간
         self.black_screen_updated = False  # 검은 화면 업데이트 플래그
+        self.camera_delay_us = 10000  # 카메라 트리거 딜레이 5ms
+        self.camera_triggered = False  # 카메라 트리거 완료 플래그
         
         self.setup_connections()
         self.setup_camera()
@@ -60,10 +63,10 @@ class App:
         self.ui.info_button.clicked.connect(self.ui.toggle_info)
         self.ui.gain_slider.valueChanged.connect(self.on_gain_change)
         
-        # 60fps 디스플레이 타이머 초기화
+        # 30fps 디스플레이 타이머 초기화
         self.display_timer = QTimer()
         self.display_timer.timeout.connect(self.update_display)
-        self.display_timer.start(8)  # 8ms마다 체크 (60fps보다 빠르게)
+        self.display_timer.start(5)  # 5ms마다 체크 (정밀한 타이밍 제어)
     
     def setup_camera(self):
         """카메라 설정"""
@@ -119,7 +122,7 @@ class App:
         self.ui.update_gain_display(value)
     
     def update_display(self):
-        """60fps 디스플레이 업데이트"""
+        """30fps 디스플레이 업데이트 (각 프레임은 16.67ms 표시)"""
         if TIMER_AVAILABLE:
             current_time = timer_module.get_hardware_timer()
             elapsed_ms = timer_module.get_timer_diff_ms(self.cycle_start_time, current_time)
@@ -129,31 +132,33 @@ class App:
             elapsed_us = current_time - self.cycle_start_time
         
         if self.display_state == 'black':
-            # 검은 화면 표시 중
+            # 검은 화면 표시
+            if not self.black_screen_updated:
+                self.black_frame_counter += 1
+                self.show_black_screen()
+                self.black_screen_updated = True
+                self.camera_triggered = False
+            
+            # 5ms 딜레이 후 카메라 트리거
+            if elapsed_us >= self.camera_delay_us and not self.camera_triggered:
+                mvsdk.CameraSoftTrigger(self.camera.hCamera)  # 5ms 딜레이 후 캡처
+                self.camera_triggered = True
+            
             if elapsed_us >= self.frame_duration_us:
-                # 한 프레임 시간이 지나면 카메라 화면으로 전환
+                # 검은 화면 → 캡처된 이미지 표시로 전환
                 self.display_state = 'camera'
                 self.cycle_start_time = current_time
-                self.black_screen_updated = False
-                
-                # 캡처된 프레임이 있으면 표시
                 if self.last_captured_frame:
                     self.ui.update_camera_frame(self.last_captured_frame)
-            else:
-                # 검은 화면 표시 및 카메라 트리거 (한 번만)
-                if not self.black_screen_updated:
-                    self.black_frame_counter += 1
-                    self.show_black_screen()
-                    mvsdk.CameraSoftTrigger(self.camera.hCamera)
-                    self.black_screen_updated = True
         
         elif self.display_state == 'camera':
-            # 카메라 화면 표시 중
+            # 캡처된 이미지 표시 중
             if elapsed_us >= self.frame_duration_us:
-                # 한 프레임 시간이 지나면 검은 화면으로 전환
+                # 이미지 표시 → 검은 화면으로 전환
                 self.display_state = 'black'
                 self.cycle_start_time = current_time
                 self.black_screen_updated = False
+                self.camera_triggered = False
     
     def show_black_screen(self):
         """검은 화면에 숫자 표시"""
