@@ -1,43 +1,94 @@
 #coding=utf-8
-"""정밀 타이머 모듈"""
-import sys
-import os
-import time
+"""
+VSync 동기화 프레임 타이머 모듈
 
-class Timer:
-    """하드웨어/소프트웨어 타이머 통합 클래스"""
+핵심 원리 (vsync_test.py 기반):
+1. 절대 시간 기준점으로 누적 드리프트 방지
+2. 정밀한 프레임 타이밍으로 하드웨어 VSync와 동기화
+3. 프레임 신호 콜백을 통한 이벤트 기반 동기화
+"""
+import time
+import threading
+import subprocess
+import re
+import os
+
+# 젯슨 디스플레이 환경 설정
+os.environ['DISPLAY'] = ':0'
+
+class VSyncFrameTimer:
+    """VSync 동기화 프레임 신호 발생기"""
     
-    def __init__(self):
-        self.timer_module = None
-        self.hw_available = False
-        self._init_hardware_timer()
+    def __init__(self, target_fps=60):
+        self.target_fps = target_fps
+        self.frame_interval_ns = int(1000000000.0 / target_fps)
+        
+        # VSync 동기화 상태
+        self.start_time = 0
+        self.frame_number = 0
+        self.is_running = False
+        
+        # 콜백 함수들
+        self.frame_callbacks = []
+        
+        # 하드웨어 주사율과 동기화
+        self._sync_with_hardware()
     
-    def _init_hardware_timer(self):
-        """하드웨어 타이머 초기화"""
+    def _sync_with_hardware(self):
+        """실제 하드웨어 주사율과 동기화"""
         try:
-            sys.path.append(os.path.join(os.path.dirname(__file__), '../../lib'))
-            import timer_module
-            self.timer_module = timer_module
-            self.hw_available = True
-            print("하드웨어 타이머 모듈 로드 완료")
-        except ImportError:
-            self.hw_available = False
-            print("하드웨어 타이머 모듈을 찾을 수 없습니다. Python 타이머를 사용합니다.")
+            result = subprocess.run(['xrandr'], capture_output=True, text=True, env={'DISPLAY': ':0'})
+            for line in result.stdout.split('\n'):
+                if '*' in line:
+                    match = re.search(r'(\d+\.?\d*)\*', line)
+                    if match:
+                        hardware_fps = float(match.group(1))
+                        self.frame_interval_ns = int(1000000000.0 / hardware_fps)
+                        print(f"🎯 하드웨어 주사율 동기화: {hardware_fps:.1f}Hz")
+                        return
+        except:
+            pass
+        print(f"📺 기본 주사율 사용: {self.target_fps}Hz")
     
-    def get_time(self):
-        """현재 시간 반환 (ms)"""
-        if self.hw_available:
-            return self.timer_module.get_hardware_timer()
-        else:
-            return time.time() * 1000
+    def add_frame_callback(self, callback):
+        """프레임 신호 콜백 등록"""
+        self.frame_callbacks.append(callback)
     
-    def get_diff_ms(self, start_time, end_time):
-        """시간 차이 계산 (ms)"""
-        if self.hw_available:
-            return self.timer_module.get_timer_diff_ms(start_time, end_time)
-        else:
-            return end_time - start_time
+    def start(self):
+        """VSync 동기화 프레임 신호 시작"""
+        if self.is_running:
+            return
+            
+        self.is_running = True
+        self.start_time = time.time_ns()
+        self.frame_number = 0
+        
+        def frame_loop():
+            while self.is_running:
+                self.frame_number += 1
+                
+                # 절대 시간 기준 다음 프레임 시점 계산 (누적 드리프트 방지)
+                target_time = self.start_time + (self.frame_number * self.frame_interval_ns)
+                
+                # 정밀 대기
+                while True:
+                    current_time = time.time_ns()
+                    remaining = target_time - current_time
+                    
+                    if remaining <= 0:
+                        break
+                        
+                    if remaining > 1000000:  # 1ms 이상
+                        time.sleep((remaining - 500000) / 1000000000.0)
+                
+                # 프레임 신호 발생
+                frame_timestamp = time.time_ns()
+                for callback in self.frame_callbacks:
+                    callback(self.frame_number, frame_timestamp)
+        
+        self.timer_thread = threading.Thread(target=frame_loop, daemon=True)
+        self.timer_thread.start()
     
-    def is_hardware_available(self):
-        """하드웨어 타이머 사용 가능 여부"""
-        return self.hw_available
+    def stop(self):
+        """프레임 신호 중지"""
+        self.is_running = False

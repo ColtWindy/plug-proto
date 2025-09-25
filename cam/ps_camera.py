@@ -10,7 +10,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
 from ps_camera_modules.camera import CameraController
 from ps_camera_modules.ui import PSCameraUI
-from ps_camera_modules.timer import Timer
+from ps_camera_modules.timer import VSyncFrameTimer
 
 
 # 젯슨 로컬 디스플레이 환경 설정 (SSH 접속 시)
@@ -23,21 +23,13 @@ class App:
     def __init__(self):
         self.camera = CameraController(TARGET_CAMERA_IP)
         self.ui = PSCameraUI()
-        self.timer = Timer()
+        self.timer = VSyncFrameTimer(target_fps=60)
         
-        # FPS 측정용
-        self.frame_count = 0
-        self.last_time = self.timer.get_time()
-        self.fps = 0
-        
-        # 디스플레이 타이밍 제어
+        # VSync 동기화 상태
         self.display_state = 'black'  # 'black' 또는 'camera'
-        self.cycle_start_time = self.timer.get_time()
         self.last_captured_frame = None
-        self.black_frame_counter = 0  # 검은 화면 카운터
-        self.last_trigger_time = 0  # 마지막 트리거 시간
-        self.black_screen_updated = False  # 검은 화면 업데이트 플래그
-        self.camera_triggered = False  # 카메라 트리거 완료 플래그
+        self.black_frame_counter = 0
+        self.fps = 60.0
         
         self.setup_connections()
         self.setup_camera()
@@ -57,83 +49,48 @@ class App:
         # 콜백 함수 등록
         self.camera.set_frame_callback(self.on_new_frame)
         
+        # VSync 프레임 신호 콜백 등록
+        self.timer.add_frame_callback(self.on_frame_signal)
+        
         # 초기 UI 값 설정
         gain_value = self.camera.get_gain()
         self.ui.set_slider_values(gain_value)
         self.ui.update_gain_display(gain_value)
         
-        # 하드웨어 타이머 기반 메인 루프 시작
-        self.start_display_loop()
+        # VSync 동기화 시작
+        self.timer.start()
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
         # 캡처된 프레임에 숫자 추가
         self.last_captured_frame = self.add_number_to_frame(q_image)
-        self.calculate_fps()
         
         # 자동 노출 모드 실시간 값 업데이트
         exposure_ms = self.camera.get_exposure_ms()
         self.camera.camera_info['exposure'] = int(exposure_ms)
-        
-        # FPS를 camera_info에 추가
         self.camera.camera_info['fps'] = self.fps
         self.ui.update_info_panel(self.camera.camera_info)
     
-    def calculate_fps(self):
-        """FPS 계산"""
-        self.frame_count += 1
-        current_time = self.timer.get_time()
-        elapsed_ms = self.timer.get_diff_ms(self.last_time, current_time)
-        
-        # 1초마다 FPS 계산
-        if elapsed_ms >= 1000:  # 1초 = 1000ms
-            self.fps = self.frame_count / (elapsed_ms / 1000.0)
-            self.frame_count = 0
-            self.last_time = current_time
+    def on_frame_signal(self, frame_number, timestamp):
+        """VSync 동기화 프레임 신호 콜백"""
+        if self.display_state == 'black':
+            # 검은 화면 표시 및 카메라 트리거
+            self.black_frame_counter += 1
+            self.show_black_screen()
+            mvsdk.CameraSoftTrigger(self.camera.hCamera)
+            self.display_state = 'camera'
+            
+        elif self.display_state == 'camera':
+            # 캡처된 프레임 표시
+            if self.last_captured_frame:
+                self.ui.update_camera_frame(self.last_captured_frame)
+            self.display_state = 'black'
     
     
     def on_gain_change(self, value):
         """게인 슬라이더 변경"""
         self.camera.set_gain(value)
         self.ui.update_gain_display(value)
-    
-    def start_display_loop(self):
-        """하드웨어 타이머 기반 메인 디스플레이 루프"""
-        import threading
-        
-        def display_loop():
-            # 60fps = 16.666... ms per frame (정확한 계산)
-            frame_time_ms = 1000.0 / 60.0  # 16.666666... ms
-            
-            while True:
-                current_time = self.timer.get_time()
-                elapsed_ms = self.timer.get_diff_ms(self.cycle_start_time, current_time)
-                
-                if self.display_state == 'black':
-                    # 검은 화면 시작 시 즉시 트리거
-                    if not self.black_screen_updated:
-                        self.black_frame_counter += 1
-                        self.show_black_screen()
-                        mvsdk.CameraSoftTrigger(self.camera.hCamera)
-                        self.black_screen_updated = True
-                    
-                    # 정확한 60fps 타이밍으로 전환
-                    if elapsed_ms >= frame_time_ms:
-                        self.display_state = 'camera'
-                        self.cycle_start_time = self.timer.get_time()
-                        if self.last_captured_frame:
-                            self.ui.update_camera_frame(self.last_captured_frame)
-                
-                elif self.display_state == 'camera':
-                    # 정확한 60fps 타이밍으로 전환
-                    if elapsed_ms >= frame_time_ms:
-                        self.display_state = 'black'
-                        self.cycle_start_time = self.timer.get_time()
-                        self.black_screen_updated = False
-        
-        # 백그라운드 스레드에서 실행
-        self.display_thread = threading.Thread(target=display_loop, daemon=True)
-        self.display_thread.start()
     
     def show_black_screen(self):
         """검은 화면 표시"""
@@ -180,6 +137,7 @@ class App:
     
     def cleanup(self):
         """정리"""
+        self.timer.stop()
         self.camera.cleanup()
 
 def main():
