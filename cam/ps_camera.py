@@ -20,8 +20,8 @@ os.environ['DISPLAY'] = ':0'
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 5      # 화면 그리기 딜레이 보정 (1-10ms)
-EXPOSURE_REDUCTION_MS = 0  # 노출시간 단축 (0-10ms)
+VSYNC_DELAY_MS = 1      # 화면 그리기 딜레이 보정 (1-10ms)
+EXPOSURE_REDUCTION_MS = 10  # 노출시간 단축 (0-10ms)
 
 class App:
     def __init__(self):
@@ -31,7 +31,7 @@ class App:
         
         # VSync 동기화 상태
         self.display_state = 'black'  # 'black' 또는 'camera'
-        self.last_captured_frame = None
+        self.current_display_frame = None  # 현재 표시용 프레임 (고정)
         self.black_frame_counter = 0
         self.fps = 30.0
         
@@ -82,8 +82,10 @@ class App:
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
-        # 캡처된 프레임에 숫자 추가
-        self.last_captured_frame = self.add_number_to_frame(q_image)
+        # 캡처된 프레임 저장 (타이밍과 무관하게 언제든 사용 가능)
+        processed_frame = self.add_number_to_frame(q_image)
+        if processed_frame:
+            self.current_display_frame = processed_frame
         
         # 자동 노출 모드 실시간 값 업데이트
         exposure_ms = self.camera.get_exposure_ms()
@@ -97,17 +99,19 @@ class App:
         # 4프레임 주기: 검은화면 2프레임 (0,1) + 카메라 2프레임 (2,3)
         cycle_position = frame_number % 4
         
-        if cycle_position == 0 or cycle_position == 1:  # 검은화면 2프레임
-            if cycle_position == 0:  # 첫 번째 검은화면에서만 카메라 트리거
-                self.black_frame_counter += 1
-                if self.camera.hCamera:
-                    mvsdk.CameraSoftTrigger(self.camera.hCamera)
-            # 비동기 지연 후 검은화면 표시 (스레드 블로킹 방지)
+        if cycle_position == 0:  # 첫 번째 검은화면 - 카메라 트리거
+            self.black_frame_counter += 1
+            if self.camera.hCamera:
+                mvsdk.CameraSoftTrigger(self.camera.hCamera)
             self._schedule_delayed_action(self.show_black_screen)
-        else:  # cycle_position == 2 or 3, 카메라 2프레임
-            # 비동기 지연 후 캡처된 프레임 표시 (스레드 블로킹 방지)
-            if self.last_captured_frame:
-                self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.last_captured_frame))
+            
+        elif cycle_position == 1:  # 두 번째 검은화면
+            self._schedule_delayed_action(self.show_black_screen)
+            
+        else:  # cycle_position == 2 or 3, 카메라 표시 2프레임
+            # 저장된 프레임 표시 (노출시간과 무관)
+            if self.current_display_frame:
+                self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.current_display_frame))
             else:
                 self._schedule_delayed_action(self.show_black_screen)  # 백업용
     
