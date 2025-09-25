@@ -10,16 +10,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
 from ps_camera_modules.camera import CameraController
 from ps_camera_modules.ui import PSCameraUI
+from ps_camera_modules.timer import Timer
 
-# C++ 타이머 모듈 import
-try:
-    sys.path.append(os.path.join(os.path.dirname(__file__), '../lib'))
-    import timer_module
-    TIMER_AVAILABLE = True
-    print("하드웨어 타이머 모듈 로드 완료")
-except ImportError:
-    TIMER_AVAILABLE = False
-    print("하드웨어 타이머 모듈을 찾을 수 없습니다. Python 타이머를 사용합니다.")
 
 # 젯슨 로컬 디스플레이 환경 설정 (SSH 접속 시)
 os.environ['DISPLAY'] = ':0'
@@ -31,21 +23,16 @@ class App:
     def __init__(self):
         self.camera = CameraController(TARGET_CAMERA_IP)
         self.ui = PSCameraUI()
+        self.timer = Timer()
         
         # FPS 측정용
         self.frame_count = 0
-        if TIMER_AVAILABLE:
-            self.last_time = timer_module.get_hardware_timer()
-        else:
-            self.last_time = time.time() * 1000000
+        self.last_time = self.timer.get_time()
         self.fps = 0
         
-        # 하드웨어 타이머 기반 정밀 타이밍 제어
+        # 디스플레이 타이밍 제어
         self.display_state = 'black'  # 'black' 또는 'camera'
-        if TIMER_AVAILABLE:
-            self.cycle_start_time = timer_module.get_hardware_timer()
-        else:
-            self.cycle_start_time = time.time() * 1000
+        self.cycle_start_time = self.timer.get_time()
         self.last_captured_frame = None
         self.black_frame_counter = 0  # 검은 화면 카운터
         self.last_trigger_time = 0  # 마지막 트리거 시간
@@ -95,18 +82,12 @@ class App:
     def calculate_fps(self):
         """FPS 계산"""
         self.frame_count += 1
-        
-        if TIMER_AVAILABLE:
-            current_time = timer_module.get_hardware_timer()
-            elapsed_ms = timer_module.get_timer_diff_ms(self.last_time, current_time)
-            elapsed_us = elapsed_ms * 1000
-        else:
-            current_time = time.time() * 1000000
-            elapsed_us = current_time - self.last_time
+        current_time = self.timer.get_time()
+        elapsed_ms = self.timer.get_diff_ms(self.last_time, current_time)
         
         # 1초마다 FPS 계산
-        if elapsed_us >= 1000000:  # 1초 = 1,000,000 마이크로초
-            self.fps = self.frame_count / (elapsed_us / 1000000.0)
+        if elapsed_ms >= 1000:  # 1초 = 1000ms
+            self.fps = self.frame_count / (elapsed_ms / 1000.0)
             self.frame_count = 0
             self.last_time = current_time
     
@@ -124,12 +105,8 @@ class App:
             target_frame_ms = 16.67
             
             while True:
-                if TIMER_AVAILABLE:
-                    current_time = timer_module.get_hardware_timer()
-                    elapsed_ms = timer_module.get_timer_diff_ms(self.cycle_start_time, current_time)
-                else:
-                    current_time = time.time() * 1000
-                    elapsed_ms = current_time - self.cycle_start_time
+                current_time = self.timer.get_time()
+                elapsed_ms = self.timer.get_diff_ms(self.cycle_start_time, current_time)
                 
                 if self.display_state == 'black':
                     # 검은 화면 시작 시 즉시 트리거
@@ -142,10 +119,7 @@ class App:
                     # 16.67ms 후 카메라 화면으로 전환
                     if elapsed_ms >= target_frame_ms:
                         self.display_state = 'camera'
-                        if TIMER_AVAILABLE:
-                            self.cycle_start_time = timer_module.get_hardware_timer()
-                        else:
-                            self.cycle_start_time = time.time() * 1000
+                        self.cycle_start_time = self.timer.get_time()
                         if self.last_captured_frame:
                             self.ui.update_camera_frame(self.last_captured_frame)
                 
@@ -153,10 +127,7 @@ class App:
                     # 16.67ms 후 검은 화면으로 전환
                     if elapsed_ms >= target_frame_ms:
                         self.display_state = 'black'
-                        if TIMER_AVAILABLE:
-                            self.cycle_start_time = timer_module.get_hardware_timer()
-                        else:
-                            self.cycle_start_time = time.time() * 1000
+                        self.cycle_start_time = self.timer.get_time()
                         self.black_screen_updated = False
                 
                 # 매우 짧은 대기 (CPU 사용량 제어)
