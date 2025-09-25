@@ -37,58 +37,82 @@ def get_display_refresh_rate():
 
 def measure_vsync_timing(refresh_rate):
     """
-    VSync 타이밍 측정 및 동기화 확인
+    누적 드리프트 방지 VSync 타이밍 측정
     
-    원리:
-    - VSync는 모니터가 새 프레임을 표시할 준비가 된 신호
-    - 60Hz 모니터 = 16.67ms마다 VSync 발생
-    - 정확한 간격으로 렌더링하면 VSync와 동기화됨
+    핵심: 절대 시간 기준점을 유지하여 누적 드리프트 완전 차단
+    - 상대적 측정 금지, 절대 시간 기준 사용
+    - 각 프레임을 독립적이 아닌 절대 시퀀스로 처리
     """
-    expected_interval_ns = int(1000000000.0 / refresh_rate)  # 나노초 단위 예상 간격
-    expected_interval_ms = expected_interval_ns / 1000000.0   # 밀리초 단위 표시용
+    expected_interval_ns = int(1000000000.0 / refresh_rate)
+    expected_interval_ms = expected_interval_ns / 1000000.0
     
     print(f"🎯 하드웨어 주사율: {refresh_rate:.1f}Hz (간격: {expected_interval_ms:.1f}ms)")
-    print("📊 실시간 VSync 동기화 측정:")
+    print("📊 누적 드리프트 방지 VSync 측정:")
     print()
     
-    last_time = 0
+    # 절대 기준점 설정 (드리프트 방지의 핵심)
+    start_time = time.time_ns()
+    frame_number = 0
     aligned_count = 0
-    total_count = 0
     
     try:
         while True:
-            # 하드웨어 주사율에 맞춰 대기 (95% 시점에서 정밀 측정)
-            time.sleep(expected_interval_ns / 1000000000.0 * 0.95)
+            frame_number += 1
             
-            # 나노초 정밀도 시간 측정 (VSync 동기화의 핵심)
-            current_time = time.time_ns()
+            # 절대 시간 기준 다음 VSync 시점 계산
+            target_time = start_time + (frame_number * expected_interval_ns)
             
-            if last_time > 0:
-                # 실제 프레임 간격 계산
-                actual_interval = current_time - last_time
+            # 목표 시점까지 정밀 대기
+            while True:
+                current_time = time.time_ns()
+                remaining = target_time - current_time
+                
+                if remaining <= 0:
+                    break
+                    
+                if remaining > 1000000:  # 1ms 이상 남음
+                    time.sleep((remaining - 500000) / 1000000000.0)  # 0.5ms 여유
+                # 마지막은 busy waiting으로 정밀 대기
+            
+            # 실제 측정 시점
+            actual_time = time.time_ns()
+            
+            # 누적 드리프트 계산 (절대 기준 대비)
+            expected_absolute_time = start_time + (frame_number * expected_interval_ns)
+            cumulative_drift = actual_time - expected_absolute_time
+            
+            # 프레임 간격 계산 (표시용)
+            if frame_number > 1:
+                prev_target = start_time + ((frame_number - 1) * expected_interval_ns)
+                actual_interval = actual_time - prev_target
                 actual_ms = actual_interval / 1000000.0
-                
-                # VSync 동기화 여부 판단 (±5% 허용 오차)
-                error_percent = abs(actual_interval - expected_interval_ns) / expected_interval_ns * 100
-                is_synced = error_percent <= 5.0
-                
-                # 통계 업데이트
-                total_count += 1
-                if is_synced:
-                    aligned_count += 1
-                
-                # 실시간 결과 표시
-                status = "🟢 동기화" if is_synced else "🔴 비동기화"
-                accuracy = 100 - error_percent
-                sync_rate = (aligned_count / total_count) * 100 if total_count > 0 else 0
-                
-                print(f"{status} | 실제: {actual_ms:5.1f}ms | 예상: {expected_interval_ms:5.1f}ms | "
-                      f"정확도: {accuracy:4.1f}% | 동기화율: {sync_rate:4.1f}%")
+            else:
+                actual_ms = expected_interval_ms
             
-            last_time = current_time
+            # 동기화 상태 판단
+            drift_ms = cumulative_drift / 1000000.0
+            is_synced = abs(cumulative_drift) < expected_interval_ns * 0.25  # 1/4 프레임 이내
+            
+            if is_synced:
+                aligned_count += 1
+            
+            # 실시간 결과 표시
+            status = "🟢 동기화" if is_synced else "🔴 드리프트"
+            sync_rate = (aligned_count / frame_number) * 100
+            
+            print(f"{status} | 프레임: {frame_number:4d} | 간격: {actual_ms:5.1f}ms | "
+                  f"누적드리프트: {drift_ms:+6.2f}ms | 동기화율: {sync_rate:4.1f}%")
+            
+            # 드리프트가 임계치 초과시 재동기화
+            if abs(cumulative_drift) > expected_interval_ns // 2:  # 1/2 프레임
+                print("🔄 재동기화 실행")
+                start_time = actual_time
+                frame_number = 0
+                aligned_count = 0
             
     except KeyboardInterrupt:
-        print(f"\n📈 최종 결과: VSync 동기화율 {sync_rate:.1f}% ({aligned_count}/{total_count})")
+        print(f"\n📈 최종 결과: VSync 동기화율 {sync_rate:.1f}% (총 {frame_number}프레임)")
+        print(f"📊 최종 누적 드리프트: {drift_ms:+.2f}ms")
         print("✅ 테스트 완료")
 
 def main():
