@@ -85,8 +85,8 @@ class App:
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
-        # 캡처된 프레임 저장
-        self.last_captured_frame = q_image
+        # 캡처된 프레임에 숫자 추가
+        self.last_captured_frame = self.add_number_to_frame(q_image)
         self.calculate_fps()
         
         # 자동 노출 모드 실시간 값 업데이트
@@ -161,9 +161,25 @@ class App:
                 self.camera_triggered = False
     
     def show_black_screen(self):
-        """검은 화면에 숫자 표시"""
+        """검은 화면 표시"""
         # 640x480 검은 이미지 생성
         black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # QImage로 변환
+        height, width, channel = black_frame.shape
+        bytes_per_line = 3 * width
+        q_image = QImage(black_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        
+        self.ui.update_camera_frame(q_image)
+    
+    def add_number_to_frame(self, q_image):
+        """캡처된 프레임에 숫자 추가"""
+        # QImage를 numpy 배열로 변환
+        width = q_image.width()
+        height = q_image.height()
+        ptr = q_image.bits()
+        arr = np.array(ptr).reshape(height, width, 3)
+        frame = arr.copy()
         
         # 중앙에 흰색 숫자 표시
         text = str(self.black_frame_counter)
@@ -172,19 +188,16 @@ class App:
         
         # 텍스트 크기 계산
         text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-        text_x = (black_frame.shape[1] - text_size[0]) // 2
-        text_y = (black_frame.shape[0] + text_size[1]) // 2
+        text_x = (frame.shape[1] - text_size[0]) // 2
+        text_y = (frame.shape[0] + text_size[1]) // 2
         
         # 흰색 텍스트 그리기
-        cv2.putText(black_frame, text, (text_x, text_y), 
+        cv2.putText(frame, text, (text_x, text_y), 
                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
         
-        # QImage로 변환
-        height, width, channel = black_frame.shape
+        # 다시 QImage로 변환
         bytes_per_line = 3 * width
-        q_image = QImage(black_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        
-        self.ui.update_camera_frame(q_image)
+        return QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
      
     def show(self):
         """UI 표시"""
