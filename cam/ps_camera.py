@@ -20,7 +20,7 @@ os.environ['DISPLAY'] = ':0'
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 1      # 화면 그리기 딜레이 보정 (1-10ms)
+VSYNC_DELAY_MS = 5      # 화면 그리기 딜레이 보정 (1-10ms)
 EXPOSURE_REDUCTION_MS = 0  # 노출시간 단축 (0-10ms)
 
 class App:
@@ -38,6 +38,11 @@ class App:
         # VSync 타이밍 설정 (상수값, 실행 중 변경 금지)
         self.vsync_delay_ms = VSYNC_DELAY_MS
         self.exposure_reduction_ms = EXPOSURE_REDUCTION_MS
+        
+        # 지연 처리용 QTimer (스레드 블로킹 방지)
+        self.delay_timer = QTimer()
+        self.delay_timer.setSingleShot(True)
+        self.pending_action = None
         
         self.setup_connections()
         self.setup_camera()
@@ -88,14 +93,6 @@ class App:
     
     def on_frame_signal(self, frame_number):
         """VSync 동기화 프레임 신호 콜백 (메인 스레드에서 안전 실행)"""
-        # VSync 딜레이 보정 (상수값, 누적 드리프트 방지)
-        if self.vsync_delay_ms > 1:  # 1ms 초과시만 대기
-            delay_ns = self.vsync_delay_ms * 1000000
-            target_time = time.time_ns() + delay_ns
-            
-            while time.time_ns() < target_time:
-                pass  # 정밀 대기
-        
         # VSync 동기화 상태 전환 (30Hz 기준)
         # 4프레임 주기: 검은화면 2프레임 (0,1) + 카메라 2프레임 (2,3)
         cycle_position = frame_number % 4
@@ -105,11 +102,14 @@ class App:
                 self.black_frame_counter += 1
                 if self.camera.hCamera:
                     mvsdk.CameraSoftTrigger(self.camera.hCamera)
-            self.show_black_screen()
+            # 비동기 지연 후 검은화면 표시 (스레드 블로킹 방지)
+            self._schedule_delayed_action(self.show_black_screen)
         else:  # cycle_position == 2 or 3, 카메라 2프레임
-            # 캡처된 프레임 표시
+            # 비동기 지연 후 캡처된 프레임 표시 (스레드 블로킹 방지)
             if self.last_captured_frame:
-                self.ui.update_camera_frame(self.last_captured_frame)
+                self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.last_captured_frame))
+            else:
+                self._schedule_delayed_action(self.show_black_screen)  # 백업용
     
     
     def on_gain_change(self, value):
@@ -140,6 +140,27 @@ class App:
         q_image = QImage(black_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
         
         self.ui.update_camera_frame(q_image)
+    
+    def _schedule_delayed_action(self, action):
+        """VSync 딜레이를 비동기로 처리 (스레드 블로킹 방지)"""
+        self.pending_action = action
+        
+        if self.vsync_delay_ms > 0:
+            # QTimer로 비동기 지연 처리
+            self.delay_timer.timeout.connect(self._execute_pending_action)
+            self.delay_timer.start(self.vsync_delay_ms)
+        else:
+            # 지연 없이 즉시 실행
+            self._execute_pending_action()
+    
+    def _execute_pending_action(self):
+        """대기 중인 액션 실행"""
+        # QTimer 연결 해제 (중복 실행 방지)
+        self.delay_timer.timeout.disconnect()
+        
+        if self.pending_action:
+            self.pending_action()
+            self.pending_action = None
     
     def add_number_to_frame(self, q_image):
         """캡처된 프레임에 숫자 추가 (안전한 방식)"""
@@ -180,6 +201,7 @@ class App:
     def cleanup(self):
         """정리"""
         self.timer.stop()
+        self.delay_timer.stop()  # 지연 타이머 정리
         self.camera.cleanup()
 
 def main():
