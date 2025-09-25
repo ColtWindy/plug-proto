@@ -40,14 +40,12 @@ class App:
             self.last_time = time.time() * 1000000
         self.fps = 0
         
-        # 30fps 타이밍 제어용 (각 프레임은 60fps 기준 16.67ms 표시)
-        self.frame_duration_us = 16667  # 각 프레임 표시 시간: 16.67ms (60fps 기준)
-        self.cycle_duration_us = 33333  # 전체 사이클 시간: 33.33ms (30fps 기준)
+        # 하드웨어 타이머 기반 정밀 타이밍 제어
         self.display_state = 'black'  # 'black' 또는 'camera'
         if TIMER_AVAILABLE:
             self.cycle_start_time = timer_module.get_hardware_timer()
         else:
-            self.cycle_start_time = time.time() * 1000000
+            self.cycle_start_time = time.time() * 1000
         self.last_captured_frame = None
         self.black_frame_counter = 0  # 검은 화면 카운터
         self.last_trigger_time = 0  # 마지막 트리거 시간
@@ -61,11 +59,6 @@ class App:
         """UI 연결"""
         self.ui.info_button.clicked.connect(self.ui.toggle_info)
         self.ui.gain_slider.valueChanged.connect(self.on_gain_change)
-        
-        # 30fps 디스플레이 타이머 초기화
-        self.display_timer = QTimer()
-        self.display_timer.timeout.connect(self.update_display)
-        self.display_timer.start(5)  # 5ms마다 체크 (정밀한 타이밍 제어)
     
     def setup_camera(self):
         """카메라 설정"""
@@ -81,6 +74,9 @@ class App:
         gain_value = self.camera.get_gain()
         self.ui.set_slider_values(gain_value)
         self.ui.update_gain_display(gain_value)
+        
+        # 하드웨어 타이머 기반 메인 루프 시작
+        self.start_display_loop()
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
@@ -120,38 +116,55 @@ class App:
         self.camera.set_gain(value)
         self.ui.update_gain_display(value)
     
-    def update_display(self):
-        """30fps 디스플레이 업데이트 (각 프레임은 16.67ms 표시)"""
-        if TIMER_AVAILABLE:
-            current_time = timer_module.get_hardware_timer()
-            elapsed_ms = timer_module.get_timer_diff_ms(self.cycle_start_time, current_time)
-            elapsed_us = elapsed_ms * 1000
-        else:
-            current_time = time.time() * 1000000
-            elapsed_us = current_time - self.cycle_start_time
+    def start_display_loop(self):
+        """하드웨어 타이머 기반 메인 디스플레이 루프"""
+        import threading
         
-        if self.display_state == 'black':
-            # 검은 화면 표시 및 즉시 카메라 트리거
-            if not self.black_screen_updated:
-                self.black_frame_counter += 1
-                self.show_black_screen()
-                mvsdk.CameraSoftTrigger(self.camera.hCamera)  # 즉시 캡처
-                self.black_screen_updated = True
+        def display_loop():
+            target_frame_ms = 16.67
             
-            if elapsed_us >= self.frame_duration_us:
-                # 검은 화면 → 캡처된 이미지 표시로 전환
-                self.display_state = 'camera'
-                self.cycle_start_time = current_time
-                if self.last_captured_frame:
-                    self.ui.update_camera_frame(self.last_captured_frame)
+            while True:
+                if TIMER_AVAILABLE:
+                    current_time = timer_module.get_hardware_timer()
+                    elapsed_ms = timer_module.get_timer_diff_ms(self.cycle_start_time, current_time)
+                else:
+                    current_time = time.time() * 1000
+                    elapsed_ms = current_time - self.cycle_start_time
+                
+                if self.display_state == 'black':
+                    # 검은 화면 시작 시 즉시 트리거
+                    if not self.black_screen_updated:
+                        self.black_frame_counter += 1
+                        self.show_black_screen()
+                        mvsdk.CameraSoftTrigger(self.camera.hCamera)
+                        self.black_screen_updated = True
+                    
+                    # 16.67ms 후 카메라 화면으로 전환
+                    if elapsed_ms >= target_frame_ms:
+                        self.display_state = 'camera'
+                        if TIMER_AVAILABLE:
+                            self.cycle_start_time = timer_module.get_hardware_timer()
+                        else:
+                            self.cycle_start_time = time.time() * 1000
+                        if self.last_captured_frame:
+                            self.ui.update_camera_frame(self.last_captured_frame)
+                
+                elif self.display_state == 'camera':
+                    # 16.67ms 후 검은 화면으로 전환
+                    if elapsed_ms >= target_frame_ms:
+                        self.display_state = 'black'
+                        if TIMER_AVAILABLE:
+                            self.cycle_start_time = timer_module.get_hardware_timer()
+                        else:
+                            self.cycle_start_time = time.time() * 1000
+                        self.black_screen_updated = False
+                
+                # 매우 짧은 대기 (CPU 사용량 제어)
+                time.sleep(0.0001)  # 0.1ms
         
-        elif self.display_state == 'camera':
-            # 캡처된 이미지 표시 중
-            if elapsed_us >= self.frame_duration_us:
-                # 이미지 표시 → 검은 화면으로 전환
-                self.display_state = 'black'
-                self.cycle_start_time = current_time
-                self.black_screen_updated = False
+        # 백그라운드 스레드에서 실행
+        self.display_thread = threading.Thread(target=display_loop, daemon=True)
+        self.display_thread.start()
     
     def show_black_screen(self):
         """검은 화면 표시"""
@@ -198,7 +211,6 @@ class App:
     
     def cleanup(self):
         """정리"""
-        self.display_timer.stop()
         self.camera.cleanup()
 
 def main():
