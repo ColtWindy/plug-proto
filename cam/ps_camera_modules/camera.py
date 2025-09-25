@@ -35,10 +35,9 @@ class CameraController:
             mvsdk.CameraSetIspOutFormat(self.hCamera, mvsdk.CAMERA_MEDIA_TYPE_BGR8)
             mvsdk.CameraSetTriggerMode(self.hCamera, 1)  # 수동 트리거 모드
             mvsdk.CameraSetAeState(self.hCamera, 1)  # 자동 노출 활성화
-            # 60fps 기준 정확한 노출 제한 (16.666ms = 16666 마이크로초)
-            max_exposure_us = int(1000000.0 / 60.0)  # 16666 마이크로초
-            mvsdk.CameraSetAeExposureRange(self.hCamera, 100, max_exposure_us)
             mvsdk.CameraSetAnalogGain(self.hCamera, 0)
+            
+            # 노출시간은 ps_camera.py에서 설정 (중복 제거)
             
             # 프레임 속도 설정 (0: 저속, 1: 일반, 2: 고속)
             mvsdk.CameraSetFrameSpeed(self.hCamera, 2)  # 고속 모드
@@ -71,31 +70,50 @@ class CameraController:
     @mvsdk.method(mvsdk.CAMERA_SNAP_PROC)
     def grab_callback(self, hCamera, pRawData, pFrameHead, pContext):
         """카메라 콜백 함수 - 새 프레임이 준비되면 자동 호출"""
-        FrameHead = pFrameHead[0]
-        
-        mvsdk.CameraImageProcess(hCamera, pRawData, self.pFrameBuffer, FrameHead)
-        mvsdk.CameraReleaseImageBuffer(hCamera, pRawData)
-        
-        # OpenCV 이미지로 변환
-        frame_data = (mvsdk.c_ubyte * FrameHead.uBytes).from_address(self.pFrameBuffer)
-        frame = np.frombuffer(frame_data, dtype=np.uint8)
-        frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth, 3))
-        frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
-        
-        # QImage로 변환
-        height, width, channel = frame.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-        
-        # 등록된 콜백 함수 호출
-        if self.frame_callback:
-            self.frame_callback(q_image)
+        try:
+            FrameHead = pFrameHead[0]
+            
+            mvsdk.CameraImageProcess(hCamera, pRawData, self.pFrameBuffer, FrameHead)
+            mvsdk.CameraReleaseImageBuffer(hCamera, pRawData)
+            
+            # 유효한 프레임 데이터 확인
+            if FrameHead.uBytes == 0:
+                return
+            
+            # OpenCV 이미지로 변환
+            frame_data = (mvsdk.c_ubyte * FrameHead.uBytes).from_address(self.pFrameBuffer)
+            frame = np.frombuffer(frame_data, dtype=np.uint8)
+            frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth, 3))
+            frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
+            
+            # 안전한 QImage 변환
+            height, width, channel = frame.shape
+            bytes_per_line = 3 * width
+            
+            # 데이터 연속성 보장
+            frame_contiguous = np.ascontiguousarray(frame)
+            q_image = QImage(frame_contiguous.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+            
+            # 등록된 콜백 함수 호출
+            if self.frame_callback and not q_image.isNull():
+                self.frame_callback(q_image)
+                
+        except Exception as e:
+            print(f"카메라 콜백 오류: {e}")
     
     
     def set_gain(self, value):
         """게인 설정"""
         mvsdk.CameraSetAnalogGain(self.hCamera, int(value))
         self.camera_info['gain'] = value
+    
+    def set_exposure_range(self, max_exposure_us):
+        """노출시간 범위 설정"""
+        try:
+            mvsdk.CameraSetAeExposureRange(self.hCamera, 100, max_exposure_us)
+            print(f"📸 노출시간 설정: {max_exposure_us}μs")
+        except Exception as e:
+            print(f"노출시간 설정 실패: {e}")
     
     def get_exposure_ms(self):
         """현재 노출시간 (ms 단위)"""

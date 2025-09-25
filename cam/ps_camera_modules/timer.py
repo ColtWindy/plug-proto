@@ -5,21 +5,25 @@ VSync 동기화 프레임 타이머 모듈
 핵심 원리 (vsync_test.py 기반):
 1. 절대 시간 기준점으로 누적 드리프트 방지
 2. 정밀한 프레임 타이밍으로 하드웨어 VSync와 동기화
-3. 프레임 신호 콜백을 통한 이벤트 기반 동기화
+3. Qt Signal을 통한 스레드 안전 통신
 """
 import time
 import threading
 import subprocess
 import re
 import os
+from PySide6.QtCore import QObject, Signal
 
 # 젯슨 디스플레이 환경 설정
 os.environ['DISPLAY'] = ':0'
 
-class VSyncFrameTimer:
+class VSyncFrameTimer(QObject):
     """VSync 동기화 프레임 신호 발생기"""
     
+    frame_signal = Signal(int)  # 프레임 번호만 전달 (오버플로우 방지)
+    
     def __init__(self, target_fps=60):
+        super().__init__()
         self.target_fps = target_fps
         self.frame_interval_ns = int(1000000000.0 / target_fps)
         
@@ -27,9 +31,6 @@ class VSyncFrameTimer:
         self.start_time = 0
         self.frame_number = 0
         self.is_running = False
-        
-        # 콜백 함수들
-        self.frame_callbacks = []
         
         # 하드웨어 주사율과 동기화
         self._sync_with_hardware()
@@ -44,15 +45,17 @@ class VSyncFrameTimer:
                     if match:
                         hardware_fps = float(match.group(1))
                         self.frame_interval_ns = int(1000000000.0 / hardware_fps)
-                        print(f"🎯 하드웨어 주사율 동기화: {hardware_fps:.1f}Hz")
+
+                        print(f"🎯 하드웨어 주사율 동기화: {hardware_fps}Hz")
+                        print(f"interval: {self.frame_interval_ns}")
                         return
         except:
             pass
         print(f"📺 기본 주사율 사용: {self.target_fps}Hz")
     
     def add_frame_callback(self, callback):
-        """프레임 신호 콜백 등록"""
-        self.frame_callbacks.append(callback)
+        """프레임 신호 콜백 등록 (Qt Signal 연결)"""
+        self.frame_signal.connect(callback)
     
     def start(self):
         """VSync 동기화 프레임 신호 시작"""
@@ -81,10 +84,8 @@ class VSyncFrameTimer:
                     if remaining > 1000000:  # 1ms 이상
                         time.sleep((remaining - 500000) / 1000000000.0)
                 
-                # 프레임 신호 발생
-                frame_timestamp = time.time_ns()
-                for callback in self.frame_callbacks:
-                    callback(self.frame_number, frame_timestamp)
+                # 스레드 안전 프레임 신호 발생
+                self.frame_signal.emit(self.frame_number)
         
         self.timer_thread = threading.Thread(target=frame_loop, daemon=True)
         self.timer_thread.start()
