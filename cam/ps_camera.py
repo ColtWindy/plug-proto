@@ -27,13 +27,13 @@ class App:
     def __init__(self):
         self.camera = CameraController(TARGET_CAMERA_IP)
         self.ui = PSCameraUI()
-        self.timer = VSyncFrameTimer(target_fps=60)
+        self.timer = VSyncFrameTimer(target_fps=30)
         
         # VSync 동기화 상태
         self.display_state = 'black'  # 'black' 또는 'camera'
         self.last_captured_frame = None
         self.black_frame_counter = 0
-        self.fps = 60.0
+        self.fps = 30.0
         
         # VSync 타이밍 설정 (상수값, 실행 중 변경 금지)
         self.vsync_delay_ms = VSYNC_DELAY_MS
@@ -96,14 +96,17 @@ class App:
             while time.time_ns() < target_time:
                 pass  # 정밀 대기
         
-        # VSync 동기화 상태 전환 (60Hz 기준)
-        if frame_number % 2 == 1:  # 홀수 프레임
-            # 검은 화면 + 카메라 트리거
-            self.black_frame_counter += 1
+        # VSync 동기화 상태 전환 (30Hz 기준)
+        # 4프레임 주기: 검은화면 2프레임 (0,1) + 카메라 2프레임 (2,3)
+        cycle_position = frame_number % 4
+        
+        if cycle_position == 0 or cycle_position == 1:  # 검은화면 2프레임
+            if cycle_position == 0:  # 첫 번째 검은화면에서만 카메라 트리거
+                self.black_frame_counter += 1
+                if self.camera.hCamera:
+                    mvsdk.CameraSoftTrigger(self.camera.hCamera)
             self.show_black_screen()
-            if self.camera.hCamera:
-                mvsdk.CameraSoftTrigger(self.camera.hCamera)
-        else:  # 짝수 프레임
+        else:  # cycle_position == 2 or 3, 카메라 2프레임
             # 캡처된 프레임 표시
             if self.last_captured_frame:
                 self.ui.update_camera_frame(self.last_captured_frame)
@@ -116,8 +119,8 @@ class App:
     
     def _update_camera_exposure(self):
         """노출시간 조정 (절대 시간 기준 단축)"""
-        # 60fps 기준 최대 노출시간 (16.67ms = 16,667μs)
-        base_max_exposure_us = int(1000000.0 / 60.0)
+        # 30fps 기준 최대 노출시간 (33.33ms = 33,333μs)
+        base_max_exposure_us = int(1000000.0 / 30.0)
         
         # 절대 시간 단축 적용
         reduction_us = self.exposure_reduction_ms * 1000
