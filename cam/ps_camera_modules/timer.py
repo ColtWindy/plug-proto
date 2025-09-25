@@ -45,13 +45,11 @@ class VSyncFrameTimer(QObject):
                     if match:
                         hardware_fps = float(match.group(1))
                         self.frame_interval_ns = int(1000000000.0 / hardware_fps)
-
-                        print(f"🎯 하드웨어 주사율 동기화: {hardware_fps}Hz")
-                        print(f"interval: {self.frame_interval_ns}")
                         return
         except:
             pass
-        print(f"📺 기본 주사율 사용: {self.target_fps}Hz")
+        # 기본값 사용
+        self.frame_interval_ns = int(1000000000.0 / self.target_fps)
     
     def add_frame_callback(self, callback):
         """프레임 신호 콜백 등록 (Qt Signal 연결)"""

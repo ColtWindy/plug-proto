@@ -20,20 +20,33 @@ os.environ['DISPLAY'] = ':0'
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 1      # 화면 그리기 딜레이 보정 (1-10ms)
-EXPOSURE_REDUCTION_MS = 10  # 노출시간 단축 (0-10ms)
+VSYNC_DELAY_MS = 2      # 화면 그리기 딜레이 보정 (1-10ms)
+EXPOSURE_REDUCTION_MS = 0  # 노출시간 단축 (0-10ms)
 
 class App:
     def __init__(self):
         self.camera = CameraController(TARGET_CAMERA_IP)
         self.ui = PSCameraUI()
-        self.timer = VSyncFrameTimer(target_fps=30)
+        # 하드웨어 주사율 감지
+        self.hardware_fps = self._detect_hardware_refresh_rate()
+        if not self.hardware_fps:
+            print("❌ 하드웨어 주사율 감지 실패 - 종료")
+            sys.exit(1)
+        
+        # 타이밍 계산
+        self.frame_interval_ms = 1000.0 / self.hardware_fps
+        self.cycle_length = 4  # 4프레임 주기
+        self.cycle_duration_ms = self.frame_interval_ms * self.cycle_length
+        
+        print(f"🎯 하드웨어 주사율: {self.hardware_fps:.2f}Hz")
+        print(f"🔄 4프레임 주기: {self.cycle_duration_ms:.2f}ms")
+        
+        self.timer = VSyncFrameTimer()  # 하드웨어 동기화
         
         # VSync 동기화 상태
-        self.display_state = 'black'  # 'black' 또는 'camera'
-        self.current_display_frame = None  # 현재 표시용 프레임 (고정)
+        self.display_state = 'black'
+        self.current_display_frame = None
         self.black_frame_counter = 0
-        self.fps = 30.0
         
         # VSync 타이밍 설정 (상수값, 실행 중 변경 금지)
         self.vsync_delay_ms = VSYNC_DELAY_MS
@@ -82,33 +95,41 @@ class App:
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
-        # 캡처된 프레임 저장 (타이밍과 무관하게 언제든 사용 가능)
+        # 캡처된 프레임 저장 (VSync 주기와 독립적)
         processed_frame = self.add_number_to_frame(q_image)
         if processed_frame:
             self.current_display_frame = processed_frame
         
+        # 노출시간 단축에 의한 타이밍 변화 방지:
+        # display_state에 따라 즉시 표시하지 않고 VSync 주기에 맞춰 표시
+        # 'black' 상태에서는 검은화면 유지, 'camera' 상태에서만 카메라 영상 표시
+        
         # 자동 노출 모드 실시간 값 업데이트
         exposure_ms = self.camera.get_exposure_ms()
         self.camera.camera_info['exposure'] = int(exposure_ms)
-        self.camera.camera_info['fps'] = self.fps
+        self.camera.camera_info['fps'] = self.hardware_fps
         self.ui.update_info_panel(self.camera.camera_info)
     
     def on_frame_signal(self, frame_number):
         """VSync 동기화 프레임 신호 콜백 (메인 스레드에서 안전 실행)"""
-        # VSync 동기화 상태 전환 (30Hz 기준)
+        # VSync 동기화 상태 전환 (59.81Hz 기준)
         # 4프레임 주기: 검은화면 2프레임 (0,1) + 카메라 2프레임 (2,3)
+        # 전체 주기: 66.88ms, 각 프레임: 16.72ms
         cycle_position = frame_number % 4
         
         if cycle_position == 0:  # 첫 번째 검은화면 - 카메라 트리거
+            self.display_state = 'black'
             self.black_frame_counter += 1
             if self.camera.hCamera:
                 mvsdk.CameraSoftTrigger(self.camera.hCamera)
             self._schedule_delayed_action(self.show_black_screen)
             
         elif cycle_position == 1:  # 두 번째 검은화면
+            self.display_state = 'black'
             self._schedule_delayed_action(self.show_black_screen)
             
         else:  # cycle_position == 2 or 3, 카메라 표시 2프레임
+            self.display_state = 'camera'
             # 저장된 프레임 표시 (노출시간과 무관)
             if self.current_display_frame:
                 self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.current_display_frame))
@@ -121,17 +142,34 @@ class App:
         self.camera.set_gain(value)
         self.ui.update_gain_display(value)
     
+    def _detect_hardware_refresh_rate(self):
+        """하드웨어 주사율 감지"""
+        try:
+            import subprocess
+            import re
+            result = subprocess.run(['xrandr'], capture_output=True, text=True, env={'DISPLAY': ':0'})
+            for line in result.stdout.split('\n'):
+                if '*' in line:
+                    match = re.search(r'(\d+\.?\d*)\*', line)
+                    if match:
+                        return float(match.group(1))
+        except Exception as e:
+            print(f"❌ 주사율 감지 오류: {e}")
+        return None
+    
     def _update_camera_exposure(self):
-        """노출시간 조정 (절대 시간 기준 단축)"""
-        # 30fps 기준 최대 노출시간 (33.33ms = 33,333μs)
-        base_max_exposure_us = int(1000000.0 / 30.0)
+        """노출시간 조정 (검은화면 2프레임 기간 기준)"""
+        # 검은화면 2프레임 기간 계산
+        black_screen_duration_us = int(self.frame_interval_ms * 2 * 1000)
         
-        # 절대 시간 단축 적용
+        # 노출시간 단축 적용
         reduction_us = self.exposure_reduction_ms * 1000
-        adjusted_max_exposure_us = max(100, base_max_exposure_us - reduction_us)
+        adjusted_max_exposure_us = max(100, black_screen_duration_us - reduction_us)
         
         # 카메라에 설정 적용
         self.camera.set_exposure_range(adjusted_max_exposure_us)
+        
+        print(f"📸 노출시간: {adjusted_max_exposure_us}μs (검은화면 {black_screen_duration_us}μs 내)")
     
     def show_black_screen(self):
         """검은 화면 표시"""
