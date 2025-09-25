@@ -102,7 +102,8 @@ class App:
         import threading
         
         def display_loop():
-            target_frame_ms = 16.67
+            # 60fps = 16.666... ms per frame (정확한 계산)
+            frame_time_ms = 1000.0 / 60.0  # 16.666666... ms
             
             while True:
                 current_time = self.timer.get_time()
@@ -116,22 +117,19 @@ class App:
                         mvsdk.CameraSoftTrigger(self.camera.hCamera)
                         self.black_screen_updated = True
                     
-                    # 16.67ms 후 카메라 화면으로 전환
-                    if elapsed_ms >= target_frame_ms:
+                    # 정확한 60fps 타이밍으로 전환
+                    if elapsed_ms >= frame_time_ms:
                         self.display_state = 'camera'
                         self.cycle_start_time = self.timer.get_time()
                         if self.last_captured_frame:
                             self.ui.update_camera_frame(self.last_captured_frame)
                 
                 elif self.display_state == 'camera':
-                    # 16.67ms 후 검은 화면으로 전환
-                    if elapsed_ms >= target_frame_ms:
+                    # 정확한 60fps 타이밍으로 전환
+                    if elapsed_ms >= frame_time_ms:
                         self.display_state = 'black'
                         self.cycle_start_time = self.timer.get_time()
                         self.black_screen_updated = False
-                
-                # 매우 짧은 대기 (CPU 사용량 제어)
-                time.sleep(0.0001)  # 0.1ms
         
         # 백그라운드 스레드에서 실행
         self.display_thread = threading.Thread(target=display_loop, daemon=True)
