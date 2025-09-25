@@ -20,8 +20,8 @@ os.environ['DISPLAY'] = ':0'
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 2      # 화면 그리기 딜레이 보정 (1-10ms)
-EXPOSURE_REDUCTION_MS = 0  # 노출시간 단축 (0-10ms)
+VSYNC_DELAY_MS = 3      # 화면 그리기 딜레이 보정 (1-10ms)
+EXPOSURE_REDUCTION_MS = 5  # 노출시간 단축 (0-10ms)
 
 class App:
     def __init__(self):
@@ -95,14 +95,13 @@ class App:
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
-        # 캡처된 프레임 저장 (VSync 주기와 독립적)
+        # 캡처된 프레임 저장만 수행 (즉시 표시하지 않음)
         processed_frame = self.add_number_to_frame(q_image)
         if processed_frame:
             self.current_display_frame = processed_frame
         
-        # 노출시간 단축에 의한 타이밍 변화 방지:
-        # display_state에 따라 즉시 표시하지 않고 VSync 주기에 맞춰 표시
-        # 'black' 상태에서는 검은화면 유지, 'camera' 상태에서만 카메라 영상 표시
+        # 중요: display_state와 무관하게 저장만 수행
+        # 실제 화면 표시는 VSync 신호에서만 수행
         
         # 자동 노출 모드 실시간 값 업데이트
         exposure_ms = self.camera.get_exposure_ms()
@@ -130,8 +129,8 @@ class App:
             
         else:  # cycle_position == 2 or 3, 카메라 표시 2프레임
             self.display_state = 'camera'
-            # 저장된 프레임 표시 (노출시간과 무관)
-            if self.current_display_frame:
+            # display_state가 'camera'일 때만 저장된 프레임 표시
+            if self.display_state == 'camera' and self.current_display_frame:
                 self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.current_display_frame))
             else:
                 self._schedule_delayed_action(self.show_black_screen)  # 백업용
