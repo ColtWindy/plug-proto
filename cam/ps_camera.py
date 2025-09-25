@@ -52,7 +52,6 @@ class App:
         self.black_frame_counter = 0  # 검은 화면 카운터
         self.last_trigger_time = 0  # 마지막 트리거 시간
         self.black_screen_updated = False  # 검은 화면 업데이트 플래그
-        self.camera_delay_us = 10000  # 카메라 트리거 딜레이 5ms
         self.camera_triggered = False  # 카메라 트리거 완료 플래그
         
         self.setup_connections()
@@ -132,17 +131,12 @@ class App:
             elapsed_us = current_time - self.cycle_start_time
         
         if self.display_state == 'black':
-            # 검은 화면 표시
+            # 검은 화면 표시 및 즉시 카메라 트리거
             if not self.black_screen_updated:
                 self.black_frame_counter += 1
                 self.show_black_screen()
+                mvsdk.CameraSoftTrigger(self.camera.hCamera)  # 즉시 캡처
                 self.black_screen_updated = True
-                self.camera_triggered = False
-            
-            # 5ms 딜레이 후 카메라 트리거
-            if elapsed_us >= self.camera_delay_us and not self.camera_triggered:
-                mvsdk.CameraSoftTrigger(self.camera.hCamera)  # 5ms 딜레이 후 캡처
-                self.camera_triggered = True
             
             if elapsed_us >= self.frame_duration_us:
                 # 검은 화면 → 캡처된 이미지 표시로 전환
@@ -158,7 +152,6 @@ class App:
                 self.display_state = 'black'
                 self.cycle_start_time = current_time
                 self.black_screen_updated = False
-                self.camera_triggered = False
     
     def show_black_screen(self):
         """검은 화면 표시"""
