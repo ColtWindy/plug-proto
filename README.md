@@ -33,6 +33,7 @@ https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/WindowingSystems
 
 단순 wayland실행시는 `nvstart-weston.sh`를 실행한다.
 
+- Python버전은 3.12가 필요함
 
 ### 1. 의존성 설치
 ```bash

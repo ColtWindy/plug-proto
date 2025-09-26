@@ -2,13 +2,14 @@
 name = "ps-proto"
 version = "0.1.0"
 description = "OpenCV frame counter with C++ hardware timer integration"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "PySide6==6.8.0.2",
     "opencv-python>=4.12.0.88",
     "pybind11>=3.0.1",
     "setuptools>=80.9.0",
     "numpy>=2.0.0",
+    "pywayland==0.4.14",
 ]
 
 [dependency-groups]
