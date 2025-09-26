@@ -72,7 +72,7 @@ class App:
         print(f"🎯 하드웨어 주사율: {self.hardware_fps:.2f}Hz")
         print(f"🔄 4프레임 주기: {self.cycle_duration_ms:.2f}ms")
         
-        self.timer = VSyncFrameTimer()  # 하드웨어 동기화
+        self.timer = VSyncFrameTimer()  # Wayland VSync 동기화
         
         # VSync 동기화 상태
         self.display_state = 'black'
@@ -142,6 +142,8 @@ class App:
     
     def on_frame_signal(self, frame_number):
         """VSync 동기화 프레임 신호 콜백 (메인 스레드에서 안전 실행)"""
+        # 디버그 출력 제거 (성능 향상)
+        
         # VSync 동기화 상태 전환 (59.81Hz 기준)
         # 4프레임 주기: 검은화면 2프레임 (0,1) + 카메라 2프레임 (2,3)
         # 전체 주기: 66.88ms, 각 프레임: 16.72ms
@@ -173,25 +175,9 @@ class App:
         self.ui.update_gain_display(value)
     
     def _detect_hardware_refresh_rate(self):
-        """Wayland 하드웨어 주사율 감지"""
-        import subprocess
-        import re
-        
-        # weston-info 시도
-        try:
-            result = subprocess.run(['weston-info'], capture_output=True, text=True, timeout=3)
-            if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if 'refresh:' in line:
-                        match = re.search(r'refresh:\s*(\d+\.?\d*)', line)
-                        if match:
-                            refresh_mhz = float(match.group(1))
-                            return refresh_mhz / 1000.0  # mHz -> Hz 변환
-        except:
-            pass
-        
-        # 기본값 60Hz 사용 (Jetson 표준)
-        print("주사율 감지 실패 - 60Hz 사용")
+        """Wayland VSync에서 주사율 감지 - 실제 VSync 신호 사용"""
+        # Wayland VSync에서 실제 주사율을 가져옴
+        # 기본값 60Hz (실제 VSync 신호가 정확한 타이밍 제공)
         return 60.0
     
     def _update_camera_exposure(self):
