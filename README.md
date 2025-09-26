@@ -22,9 +22,17 @@ plug-proto/
 ## 설치 및 실행
 ### 0. 환경 설정
 QT에서 PySide6 사용시 다음 `libxcb-cursor0`가 필요함
+
 ```bash
 sudo apt update && sudo apt install -y libxcb-cursor0
 ```
+- ssh접속시 DISPLAY 환경변수 설정 필요시: `export DISPLAY=:0`
+
+Wayland 활성화. 자세한 내용은 다음 링크를 참고한다.
+https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/WindowingSystems/WestonWayland.html#sd-windowingsystems-westonwayland
+
+단순 wayland실행시는 `nvstart-weston.sh`를 실행한다.
+
 
 ### 1. 의존성 설치
 ```bash
