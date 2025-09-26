@@ -153,9 +153,9 @@ class WaylandVSync:
         stride = self.width * 4
         size = stride * self.height
         
+        # 임시 파일 생성 - 최적화된 방법
         self.fd = tempfile.TemporaryFile()
-        self.fd.write(b'\x00' * size)
-        self.fd.flush()
+        self.fd.truncate(size)
         
         self.pool = self.shm.create_pool(self.fd.fileno(), size)
         # SHM 포맷을 enum으로 사용
@@ -165,16 +165,19 @@ class WaylandVSync:
         print("✓ Buffer 생성됨")
     
     def draw_frame(self):
-        """프레임 그리기 - 최적화됨"""
+        """프레임 그리기 - ARGB8888 포맷 정확히 준수"""
         if not self.data:
             return
         
         # 최소한의 색상 변화 - 성능 최적화
         color = (self.frame_count & 0xFF)  # 비트 연산으로 최적화
         
+        # ARGB8888 포맷: A,R,G,B 순서로 통일
+        a, r, g, b = 255, color, 0, 0
+        pixel = bytes([a, r, g, b])
+        
         # 메모리 블록 단위로 빠르게 채우기
-        pixel_data = bytes([color, 0, 0, 255]) * (len(self.data) // 4)
-        self.data[:len(pixel_data)] = pixel_data
+        self.data[:] = pixel * (self.width * self.height)
     
     def request_frame_callback(self):
         """실제 VSync 프레임 콜백 요청"""
@@ -204,13 +207,13 @@ class WaylandVSync:
         self.frame_count += 1
         self.pending_frame = None
         
-        # 다음 프레임 준비 (1000프레임까지 - 최대 성능 테스트)
-        if self.running and self.frame_count < 1000:
+        # 다음 프레임 준비 (300프레임까지 - 최적화 테스트)
+        if self.running and self.frame_count < 300:
             self.draw_frame()
             self.commit_frame()
         else:
             self.running = False
-            print("테스트 완료 - 1000프레임 도달")
+            print("테스트 완료 - 300프레임 도달")
     
     def commit_frame(self):
         """프레임 커밋 - 올바른 순서 보장"""
@@ -256,8 +259,8 @@ class WaylandVSync:
                     break
                 
                 # configure 받으면 VSync 체인이 자동으로 시작됨
-                if self.configured and self.frame_count >= 1000:
-                    print("테스트 완료 - 1000프레임 도달")
+                if self.configured and self.frame_count >= 300:
+                    print("테스트 완료 - 300프레임 도달")
                     break
                 
                 # configure 없이 너무 오래 대기
