@@ -13,8 +13,39 @@ from ps_camera_modules.ui import PSCameraUI
 from ps_camera_modules.timer import VSyncFrameTimer
 
 
-# 젯슨 로컬 디스플레이 환경 설정 (SSH 접속 시)
-os.environ['DISPLAY'] = ':0'
+# 젯슨 Wayland 디스플레이 환경 설정 (SSH 접속 시)
+def setup_wayland_environment():
+    """Wayland 환경 설정"""
+    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
+    if not xdg_runtime_dir:
+        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
+        xdg_runtime_dir = f"/run/user/{user_id}"
+        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
+    
+    wayland_display = os.getenv('WAYLAND_DISPLAY')
+    if not wayland_display:
+        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
+        
+        for display_name in possible_displays:
+            socket_path = os.path.join(xdg_runtime_dir, display_name)
+            if os.path.exists(socket_path):
+                os.environ['WAYLAND_DISPLAY'] = display_name
+                wayland_display = display_name
+                break
+    
+    return wayland_display, xdg_runtime_dir
+
+# Wayland 환경 설정 - wayland_test.py 방식
+wayland_display, xdg_runtime_dir = setup_wayland_environment()
+
+if not wayland_display:
+    print("❌ 사용 가능한 Wayland 디스플레이를 찾을 수 없습니다")
+    sys.exit(1)
+
+socket_path = os.path.join(xdg_runtime_dir, wayland_display)
+if not os.path.exists(socket_path):
+    print(f"❌ Wayland 소켓이 존재하지 않습니다: {socket_path}")
+    sys.exit(1)
 
 # 카메라 설정 정보
 TARGET_CAMERA_IP = "192.168.0.100"
@@ -142,19 +173,26 @@ class App:
         self.ui.update_gain_display(value)
     
     def _detect_hardware_refresh_rate(self):
-        """하드웨어 주사율 감지"""
+        """Wayland 하드웨어 주사율 감지"""
+        import subprocess
+        import re
+        
+        # weston-info 시도
         try:
-            import subprocess
-            import re
-            result = subprocess.run(['xrandr'], capture_output=True, text=True, env={'DISPLAY': ':0'})
-            for line in result.stdout.split('\n'):
-                if '*' in line:
-                    match = re.search(r'(\d+\.?\d*)\*', line)
-                    if match:
-                        return float(match.group(1))
-        except Exception as e:
-            print(f"❌ 주사율 감지 오류: {e}")
-        return None
+            result = subprocess.run(['weston-info'], capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'refresh:' in line:
+                        match = re.search(r'refresh:\s*(\d+\.?\d*)', line)
+                        if match:
+                            refresh_mhz = float(match.group(1))
+                            return refresh_mhz / 1000.0  # mHz -> Hz 변환
+        except:
+            pass
+        
+        # 기본값 60Hz 사용 (Jetson 표준)
+        print("주사율 감지 실패 - 60Hz 사용")
+        return 60.0
     
     def _update_camera_exposure(self):
         """노출시간 조정 (검은화면 2프레임 기간 기준)"""

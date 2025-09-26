@@ -14,8 +14,33 @@ import re
 import os
 from PySide6.QtCore import QObject, Signal
 
-# 젯슨 디스플레이 환경 설정
-os.environ['DISPLAY'] = ':0'
+# 젯슨 Wayland 디스플레이 환경 설정
+def setup_wayland_environment():
+    """Wayland 환경 설정"""
+    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
+    if not xdg_runtime_dir:
+        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
+        xdg_runtime_dir = f"/run/user/{user_id}"
+        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
+    
+    wayland_display = os.getenv('WAYLAND_DISPLAY')
+    if not wayland_display:
+        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
+        
+        for display_name in possible_displays:
+            socket_path = os.path.join(xdg_runtime_dir, display_name)
+            if os.path.exists(socket_path):
+                os.environ['WAYLAND_DISPLAY'] = display_name
+                wayland_display = display_name
+                break
+    
+    return wayland_display, xdg_runtime_dir
+
+# Wayland 환경 설정 - 에러 시 조용히 넘어감 (ps_camera.py에서 처리)
+try:
+    setup_wayland_environment()
+except:
+    pass  # 메인에서 처리하도록 함
 
 class VSyncFrameTimer(QObject):
     """VSync 동기화 프레임 신호 발생기"""
@@ -36,18 +61,22 @@ class VSyncFrameTimer(QObject):
         self._sync_with_hardware()
     
     def _sync_with_hardware(self):
-        """실제 하드웨어 주사율과 동기화"""
+        """Wayland 하드웨어 주사율과 동기화"""
+        # weston-info 시도
         try:
-            result = subprocess.run(['xrandr'], capture_output=True, text=True, env={'DISPLAY': ':0'})
-            for line in result.stdout.split('\n'):
-                if '*' in line:
-                    match = re.search(r'(\d+\.?\d*)\*', line)
-                    if match:
-                        hardware_fps = float(match.group(1))
-                        self.frame_interval_ns = int(1000000000.0 / hardware_fps)
-                        return
+            result = subprocess.run(['weston-info'], capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'refresh:' in line:
+                        match = re.search(r'refresh:\s*(\d+\.?\d*)', line)
+                        if match:
+                            refresh_mhz = float(match.group(1))
+                            hardware_fps = refresh_mhz / 1000.0
+                            self.frame_interval_ns = int(1000000000.0 / hardware_fps)
+                            return
         except:
             pass
+        
         # 기본값 사용
         self.frame_interval_ns = int(1000000000.0 / self.target_fps)
     
