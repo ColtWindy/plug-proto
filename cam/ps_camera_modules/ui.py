@@ -99,7 +99,7 @@ class PSCameraUI(QMainWindow):
             
         texts = [
             f"Camera: {camera_info.get('name', 'N/A')}",
-            f"IP: {camera_info.get('ip', 'N/A')}  FPS: {camera_info.get('fps', 0):.1f}Hz (4프레임주기)",
+            f"IP: {camera_info.get('ip', 'N/A')}  FPS: {camera_info.get('fps', 0):.1f}Hz (2프레임주기)",
             f"Resolution: {camera_info.get('width', 0)}x{camera_info.get('height', 0)}",
             f"Exposure: {camera_info.get('exposure', 0)}ms (Auto)  Gain: {camera_info.get('gain', 0)}"
         ]

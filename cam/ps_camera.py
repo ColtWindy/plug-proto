@@ -66,11 +66,11 @@ class App:
         
         # 타이밍 계산
         self.frame_interval_ms = 1000.0 / self.hardware_fps
-        self.cycle_length = 4  # 4프레임 주기
+        self.cycle_length = 2  # 2프레임 주기
         self.cycle_duration_ms = self.frame_interval_ms * self.cycle_length
         
         print(f"🎯 하드웨어 주사율: {self.hardware_fps:.2f}Hz")
-        print(f"🔄 4프레임 주기: {self.cycle_duration_ms:.2f}ms")
+        print(f"🔄 2프레임 주기: {self.cycle_duration_ms:.2f}ms")
         
         self.timer = VSyncFrameTimer()  # Wayland VSync 동기화
         
@@ -130,13 +130,10 @@ class App:
     
     def on_new_frame(self, q_image):
         """새 프레임 콜백 - 카메라가 새 프레임을 생성할 때마다 자동 호출"""
-        # 캡처된 프레임 저장만 수행 (즉시 표시하지 않음)
+        # 캡처된 프레임 저장 (VSync와 독립적으로 저장만)
         processed_frame = self.add_number_to_frame(q_image)
         if processed_frame:
             self.current_display_frame = processed_frame
-        
-        # 중요: display_state와 무관하게 저장만 수행
-        # 실제 화면 표시는 VSync 신호에서만 수행
         
         # 자동 노출 모드 실시간 값 업데이트
         exposure_ms = self.camera.get_exposure_ms()
@@ -146,18 +143,14 @@ class App:
     
     def on_frame_signal(self, frame_number):
         """VSync 동기화 프레임 신호 콜백 (메인 스레드에서 안전 실행)"""
-        cycle_position = frame_number % 4
-        print(f"📺 VSync 프레임: {frame_number}, 사이클: {cycle_position}")
+        cycle_position = frame_number % 2
         
         # 음수 딜레이: 카메라 트리거를 먼저 보냄
-        if self.vsync_delay_ms < 0 and cycle_position == 3:
-            # cycle 3에서 다음 cycle 0의 카메라 트리거를 미리 보냄
+        if self.vsync_delay_ms < 0 and cycle_position == 1:
             if self.camera.hCamera:
-                print(f"⚡ 카메라 선행 트리거 (딜레이: {self.vsync_delay_ms}ms)")
                 self._schedule_camera_trigger(abs(self.vsync_delay_ms))
         
-        if cycle_position == 0:  # 첫 번째 검은화면
-            print("🔴 검은화면 1")
+        if cycle_position == 0:  # 검은화면 + 카메라 트리거
             self.display_state = 'black'
             self.black_frame_counter += 1
             # 양수/0 딜레이에서만 트리거 
@@ -165,16 +158,12 @@ class App:
                 mvsdk.CameraSoftTrigger(self.camera.hCamera)
             self._schedule_delayed_action(self.show_black_screen)
             
-        elif cycle_position == 1:  # 두 번째 검은화면
-            print("⚫ 검은화면 2")
-            self.display_state = 'black'
-            self._schedule_delayed_action(self.show_black_screen)
-            
-        else:  # cycle_position == 2 or 3, 카메라 표시 2프레임
-            print(f"📷 카메라 표시 {cycle_position}")
+        else:  # cycle_position == 1, 카메라 표시
             self.display_state = 'camera'
             if self.current_display_frame:
-                self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.current_display_frame))
+                frame_to_show = self.current_display_frame
+                self.current_display_frame = None  # 사용 후 클리어
+                self._schedule_delayed_action(lambda: self.ui.update_camera_frame(frame_to_show))
             else:
                 self._schedule_delayed_action(self.show_black_screen)
     
@@ -222,6 +211,12 @@ class App:
     
     def _schedule_delayed_action(self, action):
         """VSync 딜레이를 비동기로 처리 (스레드 블로킹 방지)"""
+        # 기존 연결 해제 (중복 방지)
+        try:
+            self.delay_timer.timeout.disconnect()
+        except Exception as e:
+            print(f"⚠️ delay_timer disconnect: {e}")
+            
         self.pending_action = action
         
         if self.vsync_delay_ms > 0:
@@ -235,7 +230,10 @@ class App:
     def _execute_pending_action(self):
         """대기 중인 액션 실행"""
         # QTimer 연결 해제 (중복 실행 방지)
-        self.delay_timer.timeout.disconnect()
+        try:
+            self.delay_timer.timeout.disconnect()
+        except Exception as e:
+            print(f"⚠️ execute_pending disconnect: {e}")
         
         if self.pending_action:
             self.pending_action()
@@ -243,12 +241,19 @@ class App:
     
     def _schedule_camera_trigger(self, delay_ms):
         """카메라 트리거 선행 실행"""
+        try:
+            self.camera_timer.timeout.disconnect()
+        except Exception as e:
+            print(f"⚠️ camera_timer schedule disconnect: {e}")
         self.camera_timer.timeout.connect(self._execute_camera_trigger)
         self.camera_timer.start(delay_ms)
     
     def _execute_camera_trigger(self):
         """카메라 트리거 실행"""
-        self.camera_timer.timeout.disconnect()
+        try:
+            self.camera_timer.timeout.disconnect()
+        except Exception as e:
+            print(f"⚠️ camera_timer execute disconnect: {e}")
         mvsdk.CameraSoftTrigger(self.camera.hCamera)
     
     def add_number_to_frame(self, q_image):
