@@ -51,7 +51,7 @@ if not os.path.exists(socket_path):
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 0      # 화면 그리기 딜레이 보정 (0-50ms)
+VSYNC_DELAY_MS = 0      # 화면 그리기 딜레이 보정 (-50~+50ms)
 EXPOSURE_TIME_MS = 15   # 노출시간 직접 설정 (5-30ms)
 
 class App:
@@ -87,6 +87,10 @@ class App:
         self.delay_timer = QTimer()
         self.delay_timer.setSingleShot(True)
         self.pending_action = None
+        
+        # 카메라 선행 트리거용 QTimer
+        self.camera_timer = QTimer()
+        self.camera_timer.setSingleShot(True)
         
         self.setup_connections()
         self.setup_camera()
@@ -145,11 +149,19 @@ class App:
         cycle_position = frame_number % 4
         print(f"📺 VSync 프레임: {frame_number}, 사이클: {cycle_position}")
         
-        if cycle_position == 0:  # 첫 번째 검은화면 - 카메라 트리거
-            print("🔴 검은화면 1 + 카메라 트리거")
+        # 음수 딜레이: 카메라 트리거를 먼저 보냄
+        if self.vsync_delay_ms < 0 and cycle_position == 3:
+            # cycle 3에서 다음 cycle 0의 카메라 트리거를 미리 보냄
+            if self.camera.hCamera:
+                print(f"⚡ 카메라 선행 트리거 (딜레이: {self.vsync_delay_ms}ms)")
+                self._schedule_camera_trigger(abs(self.vsync_delay_ms))
+        
+        if cycle_position == 0:  # 첫 번째 검은화면
+            print("🔴 검은화면 1")
             self.display_state = 'black'
             self.black_frame_counter += 1
-            if self.camera.hCamera:
+            # 양수/0 딜레이에서만 트리거 
+            if self.vsync_delay_ms >= 0 and self.camera.hCamera:
                 mvsdk.CameraSoftTrigger(self.camera.hCamera)
             self._schedule_delayed_action(self.show_black_screen)
             
@@ -229,6 +241,16 @@ class App:
             self.pending_action()
             self.pending_action = None
     
+    def _schedule_camera_trigger(self, delay_ms):
+        """카메라 트리거 선행 실행"""
+        self.camera_timer.timeout.connect(self._execute_camera_trigger)
+        self.camera_timer.start(delay_ms)
+    
+    def _execute_camera_trigger(self):
+        """카메라 트리거 실행"""
+        self.camera_timer.timeout.disconnect()
+        mvsdk.CameraSoftTrigger(self.camera.hCamera)
+    
     def add_number_to_frame(self, q_image):
         """캡처된 프레임에 숫자 추가 (안전한 방식)"""
         try:
@@ -268,7 +290,8 @@ class App:
     def cleanup(self):
         """정리"""
         self.timer.stop()
-        self.delay_timer.stop()  # 지연 타이머 정리
+        self.delay_timer.stop()
+        self.camera_timer.stop()
         self.camera.cleanup()
 
 def main():

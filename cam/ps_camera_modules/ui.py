@@ -77,7 +77,7 @@ class PSCameraUI(QMainWindow):
         delay_layout = QHBoxLayout()
         delay_layout.addWidget(QLabel("VSync 딜레이:"))
         self.delay_slider = QSlider(Qt.Horizontal)
-        self.delay_slider.setRange(0, 50)
+        self.delay_slider.setRange(-50, 50)
         delay_layout.addWidget(self.delay_slider)
         self.delay_label = QLabel()
         delay_layout.addWidget(self.delay_label)
