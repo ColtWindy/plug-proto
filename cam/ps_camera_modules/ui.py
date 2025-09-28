@@ -63,19 +63,25 @@ class PSCameraUI(QMainWindow):
         gain_layout.addWidget(self.gain_label)
         controls_layout.addLayout(gain_layout)
         
-        # VSync 설정 표시 (읽기 전용)
+        # 노출시간
+        exposure_layout = QHBoxLayout()
+        exposure_layout.addWidget(QLabel("노출시간:"))
+        self.exposure_slider = QSlider(Qt.Horizontal)
+        self.exposure_slider.setRange(5, 30)
+        exposure_layout.addWidget(self.exposure_slider)
+        self.exposure_label = QLabel()
+        exposure_layout.addWidget(self.exposure_label)
+        controls_layout.addLayout(exposure_layout)
+        
+        # VSync 딜레이
         delay_layout = QHBoxLayout()
         delay_layout.addWidget(QLabel("VSync 딜레이:"))
-        self.delay_label = QLabel("1ms")
+        self.delay_slider = QSlider(Qt.Horizontal)
+        self.delay_slider.setRange(0, 50)
+        delay_layout.addWidget(self.delay_slider)
+        self.delay_label = QLabel()
         delay_layout.addWidget(self.delay_label)
         controls_layout.addLayout(delay_layout)
-        
-        # 노출시간 설정 표시 (읽기 전용)
-        exposure_layout = QHBoxLayout()
-        exposure_layout.addWidget(QLabel("노출 단축:"))
-        self.exposure_adj_label = QLabel("0ms")
-        exposure_layout.addWidget(self.exposure_adj_label)
-        controls_layout.addLayout(exposure_layout)
         
         layout.addWidget(controls)
         
@@ -113,20 +119,27 @@ class PSCameraUI(QMainWindow):
         """게인 표시 업데이트"""
         self.gain_label.setText(str(int(gain_value)))
         
+    def update_exposure_display(self, value):
+        """노출시간 표시 업데이트"""
+        self.exposure_label.setText(f"{value}ms")
+        
     def update_delay_display(self, value):
         """딜레이 표시 업데이트"""
         self.delay_label.setText(f"{value}ms")
-        
-    def update_exposure_adj_display(self, value):
-        """노출 보정 표시 업데이트"""
-        self.exposure_adj_label.setText(f"{value}ms")
     
-    
-    def set_slider_values(self, gain_value):
+    def set_slider_values(self, gain_value, exposure_value, delay_value):
         """슬라이더 값 설정 (시그널 방지)"""
         self.gain_slider.blockSignals(True)
+        self.exposure_slider.blockSignals(True)
+        self.delay_slider.blockSignals(True)
+        
         self.gain_slider.setValue(int(gain_value))
+        self.exposure_slider.setValue(int(exposure_value))
+        self.delay_slider.setValue(int(delay_value))
+        
         self.gain_slider.blockSignals(False)
+        self.exposure_slider.blockSignals(False)
+        self.delay_slider.blockSignals(False)
     
     def show_error(self, message):
         """오류 메시지 표시"""

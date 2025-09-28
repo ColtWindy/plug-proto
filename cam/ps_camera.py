@@ -51,8 +51,8 @@ if not os.path.exists(socket_path):
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 3      # 화면 그리기 딜레이 보정 (1-10ms)
-EXPOSURE_REDUCTION_MS = 5  # 노출시간 단축 (0-10ms)
+VSYNC_DELAY_MS = 0      # 화면 그리기 딜레이 보정 (0-50ms)
+EXPOSURE_TIME_MS = 15   # 노출시간 직접 설정 (5-30ms)
 
 class App:
     def __init__(self):
@@ -79,9 +79,9 @@ class App:
         self.current_display_frame = None
         self.black_frame_counter = 0
         
-        # VSync 타이밍 설정 (상수값, 실행 중 변경 금지)
+        # VSync 타이밍 설정
         self.vsync_delay_ms = VSYNC_DELAY_MS
-        self.exposure_reduction_ms = EXPOSURE_REDUCTION_MS
+        self.exposure_time_ms = EXPOSURE_TIME_MS
         
         # 지연 처리용 QTimer (스레드 블로킹 방지)
         self.delay_timer = QTimer()
@@ -95,6 +95,8 @@ class App:
         """UI 연결"""
         self.ui.info_button.clicked.connect(self.ui.toggle_info)
         self.ui.gain_slider.valueChanged.connect(self.on_gain_change)
+        self.ui.exposure_slider.valueChanged.connect(self.on_exposure_change)
+        self.ui.delay_slider.valueChanged.connect(self.on_delay_change)
     
     def setup_camera(self):
         """카메라 설정"""
@@ -111,12 +113,10 @@ class App:
         
         # 초기 UI 값 설정
         gain_value = self.camera.get_gain()
-        self.ui.set_slider_values(gain_value)
+        self.ui.set_slider_values(gain_value, self.exposure_time_ms, self.vsync_delay_ms)
         self.ui.update_gain_display(gain_value)
-        
-        # VSync 설정 표시 (읽기 전용)
+        self.ui.update_exposure_display(self.exposure_time_ms)
         self.ui.update_delay_display(self.vsync_delay_ms)
-        self.ui.update_exposure_adj_display(self.exposure_reduction_ms)
         
         # 노출시간 초기 설정
         self._update_camera_exposure()
@@ -142,14 +142,11 @@ class App:
     
     def on_frame_signal(self, frame_number):
         """VSync 동기화 프레임 신호 콜백 (메인 스레드에서 안전 실행)"""
-        # 디버그 출력 제거 (성능 향상)
-        
-        # VSync 동기화 상태 전환 (59.81Hz 기준)
-        # 4프레임 주기: 검은화면 2프레임 (0,1) + 카메라 2프레임 (2,3)
-        # 전체 주기: 66.88ms, 각 프레임: 16.72ms
         cycle_position = frame_number % 4
+        print(f"📺 VSync 프레임: {frame_number}, 사이클: {cycle_position}")
         
         if cycle_position == 0:  # 첫 번째 검은화면 - 카메라 트리거
+            print("🔴 검은화면 1 + 카메라 트리거")
             self.display_state = 'black'
             self.black_frame_counter += 1
             if self.camera.hCamera:
@@ -157,22 +154,34 @@ class App:
             self._schedule_delayed_action(self.show_black_screen)
             
         elif cycle_position == 1:  # 두 번째 검은화면
+            print("⚫ 검은화면 2")
             self.display_state = 'black'
             self._schedule_delayed_action(self.show_black_screen)
             
         else:  # cycle_position == 2 or 3, 카메라 표시 2프레임
+            print(f"📷 카메라 표시 {cycle_position}")
             self.display_state = 'camera'
-            # display_state가 'camera'일 때만 저장된 프레임 표시
-            if self.display_state == 'camera' and self.current_display_frame:
+            if self.current_display_frame:
                 self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.current_display_frame))
             else:
-                self._schedule_delayed_action(self.show_black_screen)  # 백업용
+                self._schedule_delayed_action(self.show_black_screen)
     
     
     def on_gain_change(self, value):
         """게인 슬라이더 변경"""
         self.camera.set_gain(value)
         self.ui.update_gain_display(value)
+    
+    def on_exposure_change(self, value):
+        """노출시간 슬라이더 변경"""
+        self.exposure_time_ms = value
+        self._update_camera_exposure()
+        self.ui.update_exposure_display(value)
+    
+    def on_delay_change(self, value):
+        """딜레이 슬라이더 변경"""
+        self.vsync_delay_ms = value
+        self.ui.update_delay_display(value)
     
     def _detect_hardware_refresh_rate(self):
         """하드웨어에서 주사율 직접 가져오기"""
@@ -182,18 +191,10 @@ class App:
         return refresh_rate
     
     def _update_camera_exposure(self):
-        """노출시간 조정 (검은화면 2프레임 기간 기준)"""
-        # 검은화면 2프레임 기간 계산
-        black_screen_duration_us = int(self.frame_interval_ms * 2 * 1000)
-        
-        # 노출시간 단축 적용
-        reduction_us = self.exposure_reduction_ms * 1000
-        adjusted_max_exposure_us = max(100, black_screen_duration_us - reduction_us)
-        
-        # 카메라에 설정 적용
-        self.camera.set_exposure_range(adjusted_max_exposure_us)
-        
-        print(f"📸 노출시간: {adjusted_max_exposure_us}μs (검은화면 {black_screen_duration_us}μs 내)")
+        """노출시간 직접 설정"""
+        exposure_us = self.exposure_time_ms * 1000
+        self.camera.set_exposure_range(exposure_us)
+        print(f"📸 노출시간: {self.exposure_time_ms}ms = {exposure_us}μs")
     
     def show_black_screen(self):
         """검은 화면 표시"""
