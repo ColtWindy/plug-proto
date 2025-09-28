@@ -175,10 +175,11 @@ class App:
         self.ui.update_gain_display(value)
     
     def _detect_hardware_refresh_rate(self):
-        """Wayland VSync에서 주사율 감지 - 실제 VSync 신호 사용"""
-        # Wayland VSync에서 실제 주사율을 가져옴
-        # 기본값 60Hz (실제 VSync 신호가 정확한 타이밍 제공)
-        return 60.0
+        """하드웨어에서 주사율 직접 가져오기"""
+        temp_timer = VSyncFrameTimer()
+        refresh_rate = temp_timer.get_hardware_refresh_rate()
+        temp_timer.stop()
+        return refresh_rate
     
     def _update_camera_exposure(self):
         """노출시간 조정 (검은화면 2프레임 기간 기준)"""
