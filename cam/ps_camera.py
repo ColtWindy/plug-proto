@@ -93,6 +93,7 @@ class App:
         self.camera_timer = QTimer()
         self.camera_timer.setSingleShot(True)
         
+        
         self.setup_connections()
         self.setup_camera()
     

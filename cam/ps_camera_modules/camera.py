@@ -108,10 +108,10 @@ class CameraController:
         self.camera_info['gain'] = value
     
     def set_exposure_range(self, max_exposure_us):
-        """노출시간 범위 설정"""
+        """노출시간 범위 설정 (자동 노출 모드에서 최대값 제한)"""
         try:
-            mvsdk.CameraSetAeExposureRange(self.hCamera, 100, max_exposure_us)
-            print(f"📸 노출시간 설정: {max_exposure_us}μs")
+            mvsdk.CameraSetAeExposureRange(self.hCamera, 1, max_exposure_us)
+            print(f"📸 노출시간 최대값 설정: {max_exposure_us}μs")
         except Exception as e:
             print(f"노출시간 설정 실패: {e}")
     

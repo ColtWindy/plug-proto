@@ -67,7 +67,7 @@ class PSCameraUI(QMainWindow):
         exposure_layout = QHBoxLayout()
         exposure_layout.addWidget(QLabel("노출시간:"))
         self.exposure_slider = QSlider(Qt.Horizontal)
-        self.exposure_slider.setRange(5, 30)
+        self.exposure_slider.setRange(1, 30)
         exposure_layout.addWidget(self.exposure_slider)
         self.exposure_label = QLabel()
         exposure_layout.addWidget(self.exposure_label)
