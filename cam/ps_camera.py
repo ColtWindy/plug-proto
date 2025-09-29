@@ -11,6 +11,7 @@ from PySide6.QtGui import QImage
 from ps_camera_modules.camera import CameraController
 from ps_camera_modules.ui import PSCameraUI
 from ps_camera_modules.timer import VSyncFrameTimer
+from util import measure_time
 
 
 # 젯슨 Wayland 디스플레이 환경 설정 (SSH 접속 시)
@@ -197,6 +198,7 @@ class App:
         self.camera.set_exposure_range(exposure_us)
         print(f"📸 노출시간: {self.exposure_time_ms}ms = {exposure_us}μs")
     
+    @measure_time
     def show_black_screen(self):
         """검은 화면 표시"""
         # 640x480 검은 이미지 생성

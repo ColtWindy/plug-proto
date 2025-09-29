@@ -1,0 +1,47 @@
+---
+alwaysApply: true
+---
+
+# Project Structure Guide
+
+이 프로젝트는 Jetson Orin Nano용 PySide6 + C++ 하드웨어 타이머 및 카메라 프로젝트입니다.
+
+## Main Entry Points
+- [main.py](mdc:main.py): 기본 메인 애플리케이션 
+- [cam/ps_camera.py](mdc:cam/ps_camera.py): 카메라 애플리케이션 메인 진입점
+
+## Core Architecture
+- **Python/PySide6**: GUI 및 메인 애플리케이션 로직
+- **C++ Integration**: [cpp/timer.cpp](mdc:cpp/timer.cpp)로 하드웨어 타이머 구현, pybind11으로 바인딩
+- **Camera System**: [cam/ps_camera_modules/](mdc:cam/ps_camera_modules/) 모듈로 구성된 카메라 제어 시스템
+- **Utilities**: [util.py](mdc:util.py)에 범용 유틸리티 (현재 시간 측정 decorator)
+
+## Dependencies Management
+- **Primary**: `uv` 패키지 매니저 사용 ([pyproject.toml](mdc:pyproject.toml), [uv.lock](mdc:uv.lock))
+- **Libraries**: PySide6, OpenCV (opencv-python, not headless), pybind11, numpy
+
+## Environment Requirements
+- **Platform**: Jetson Orin Nano (Ubuntu)
+- **Python**: 3.12+ required
+- **Display**: Wayland environment setup for SSH connections (DISPLAY=:0)
+- **Additional**: libxcb-cursor0 package required for Qt
+
+## Error Handling Principles (전체 프로젝트 적용)
+- **절대 fallback 코드 작성 금지**: 요청한 대로 작동하지 않으면 오류 발생시켜 해결
+- **오류 무시 금지**: `except: pass` 사용 금지, 반드시 오류 메시지 출력
+- **명확한 오류 표시**: 오류 발생 시 구체적인 메시지로 문제 파악 가능하게 처리
+
+```python
+# ❌ 잘못된 예시
+try:
+    risky_operation()
+except:
+    pass  # 절대 금지!
+
+# ✅ 올바른 예시  
+try:
+    risky_operation()
+except Exception as e:
+    print(f"❌ 작업 실패: {e}")
+    raise  # 또는 적절한 처리
+```

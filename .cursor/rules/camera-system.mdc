@@ -1,0 +1,17 @@
+---
+description: "Camera system architecture and patterns"
+---
+
+# Camera System Guide
+
+## Architecture Overview
+카메라 시스템은 모듈화된 구조로 설계되어 있습니다:
+
+- [cam/ps_camera.py](mdc:cam/ps_camera.py): 메인 애플리케이션 및 VSync 제어
+- [cam/ps_camera_modules/camera.py](mdc:cam/ps_camera_modules/camera.py): 카메라 하드웨어 제어
+- [cam/ps_camera_modules/ui.py](mdc:cam/ps_camera_modules/ui.py): PySide6 UI 컴포넌트
+- [cam/ps_camera_modules/timer.py](mdc:cam/ps_camera_modules/timer.py): VSync 타이밍 제어
+
+## Environment Setup
+- Wayland 디스플레이 환경 자동 감지 및 설정
+- opencv-python (표준 버전) 사용, headless 버전 사용 안 함
