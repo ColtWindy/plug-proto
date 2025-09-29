@@ -81,6 +81,7 @@ class App:
         # VSync 동기화 상태
         self.display_state = 'black'
         self.current_display_frame = None
+        self.last_valid_frame = None  # 마지막 유효 프레임 백업
         self.black_frame_counter = 0
         
         # VSync 타이밍 설정
@@ -139,6 +140,7 @@ class App:
         processed_frame = self.add_number_to_frame(q_image)
         if processed_frame:
             self.current_display_frame = processed_frame
+            self.last_valid_frame = processed_frame  # 백업 저장
         
         # 자동 노출 모드 실시간 값 업데이트
         exposure_ms = self.camera.get_exposure_ms()
@@ -169,7 +171,11 @@ class App:
                 frame_to_show = self.current_display_frame
                 self.current_display_frame = None  # 사용 후 클리어
                 self._schedule_delayed_action(lambda: self.ui.update_camera_frame(frame_to_show))
+            elif self.last_valid_frame:
+                # 새 프레임이 없으면 마지막 유효 프레임 재사용
+                self._schedule_delayed_action(lambda: self.ui.update_camera_frame(self.last_valid_frame))
             else:
+                # 백업도 없으면 검은화면
                 self._schedule_delayed_action(self.show_black_screen)
     
     
@@ -202,19 +208,22 @@ class App:
         self.camera.set_exposure_range(exposure_us)
         print(f"📸 노출시간: {self.exposure_time_ms}ms = {exposure_us}μs")
     
-    @measure_time
     def show_black_screen(self):
         """검은 화면 표시"""
-        # OpenGL 위젯에 None 전달하면 자동으로 검은 화면 표시
+        # QPainter 위젯에 None 전달하면 자동으로 검은 화면 표시
         self.ui.update_camera_frame(None)
     
     def _schedule_delayed_action(self, action):
         """VSync 딜레이를 비동기로 처리 (스레드 블로킹 방지)"""
-        # 기존 연결 해제 (중복 방지)
+        # 기존 연결 안전하게 해제
+        if self.delay_timer.isActive():
+            self.delay_timer.stop()
+        
+        # 특정 시그널만 연결 해제
         try:
-            self.delay_timer.timeout.disconnect()
-        except Exception as e:
-            print(f"⚠️ delay_timer disconnect: {e}")
+            self.delay_timer.timeout.disconnect(self._execute_pending_action)
+        except:
+            pass  # 연결되지 않은 경우 무시
             
         self.pending_action = action
         
@@ -228,11 +237,15 @@ class App:
     
     def _execute_pending_action(self):
         """대기 중인 액션 실행"""
-        # QTimer 연결 해제 (중복 실행 방지)
+        # QTimer 안전하게 정리
+        if self.delay_timer.isActive():
+            self.delay_timer.stop()
+        
+        # 특정 시그널만 연결 해제
         try:
-            self.delay_timer.timeout.disconnect()
-        except Exception as e:
-            print(f"⚠️ execute_pending disconnect: {e}")
+            self.delay_timer.timeout.disconnect(self._execute_pending_action)
+        except:
+            pass  # 연결되지 않은 경우 무시
         
         if self.pending_action:
             self.pending_action()
@@ -240,26 +253,37 @@ class App:
     
     def _schedule_camera_trigger(self, delay_ms):
         """카메라 트리거 선행 실행"""
+        if self.camera_timer.isActive():
+            self.camera_timer.stop()
+        
+        # 특정 시그널만 연결 해제
         try:
-            self.camera_timer.timeout.disconnect()
-        except Exception as e:
-            print(f"⚠️ camera_timer schedule disconnect: {e}")
+            self.camera_timer.timeout.disconnect(self._execute_camera_trigger)
+        except:
+            pass  # 연결되지 않은 경우 무시
+            
         self.camera_timer.timeout.connect(self._execute_camera_trigger)
         self.camera_timer.start(delay_ms)
     
     def _execute_camera_trigger(self):
         """카메라 트리거 실행"""
+        if self.camera_timer.isActive():
+            self.camera_timer.stop()
+        
+        # 특정 시그널만 연결 해제
         try:
-            self.camera_timer.timeout.disconnect()
-        except Exception as e:
-            print(f"⚠️ camera_timer execute disconnect: {e}")
-        mvsdk.CameraSoftTrigger(self.camera.hCamera)
+            self.camera_timer.timeout.disconnect(self._execute_camera_trigger)
+        except:
+            pass  # 연결되지 않은 경우 무시
+            
+        if self.camera.hCamera:
+            mvsdk.CameraSoftTrigger(self.camera.hCamera)
     
     def add_number_to_frame(self, q_image):
         """캡처된 프레임에 숫자 추가 (안전한 방식)"""
         try:
             # QImage 유효성 검사
-            if q_image.isNull() or q_image.width() == 0 or q_image.height() == 0:
+            if not q_image or q_image.isNull() or q_image.width() == 0 or q_image.height() == 0:
                 return None
                 
             # QImage를 numpy 배열로 변환
@@ -270,14 +294,22 @@ class App:
             # 안전한 배열 변환
             if ptr is None:
                 return q_image
+            
+            # 예상 크기 검증
+            expected_size = width * height * 3
+            buffer_size = len(ptr)
+            if buffer_size != expected_size:
+                print(f"⚠️ 버퍼 크기 불일치: {buffer_size} != {expected_size}")
+                return q_image
                 
             arr = np.frombuffer(ptr, dtype=np.uint8).reshape(height, width, 3)
             frame = arr.copy()
             
-            # 숫자 텍스트 추가
-            text = str(self.black_frame_counter)
-            cv2.putText(frame, text, (width//2-50, height//2), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 4, (255, 255, 255), 4)
+            # 숫자 텍스트 추가 (크기 검증 후)
+            if width >= 100 and height >= 50:
+                text = str(self.black_frame_counter)
+                cv2.putText(frame, text, (width//2-50, height//2), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 4, (255, 255, 255), 4)
             
             # 안전한 QImage 생성
             bytes_per_line = 3 * width
