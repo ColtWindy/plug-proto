@@ -51,8 +51,8 @@ if not os.path.exists(socket_path):
 TARGET_CAMERA_IP = "192.168.0.100"
 
 # VSync 타이밍 조정 상수 (실행 전 설정)
-VSYNC_DELAY_MS = 10      # 화면 그리기 딜레이 보정 (-50~+50ms)
-EXPOSURE_TIME_MS = -15   # 노출시간 직접 설정 (5-30ms)
+EXPOSURE_TIME_MS = 10   # 노출시간 직접 설정 (5-30ms)
+VSYNC_DELAY_MS = -15    # 화면 그리기 딜레이 보정 (-50~+50ms)
 
 class App:
     def __init__(self):
