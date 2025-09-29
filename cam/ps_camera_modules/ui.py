@@ -3,7 +3,40 @@
 from PySide6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, 
                               QWidget, QLabel, QSlider, QPushButton)
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QImage, QPainter
+
+class FastCameraWidget(QWidget):
+    """빠른 카메라 표시 위젯 - QPainter 기반"""
+    def __init__(self):
+        super().__init__()
+        self.pixmap = None
+        self.setFixedSize(640, 480)
+        
+        # 더블 버퍼링 활성화
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_OpaquePaintEvent)
+    
+    def paintEvent(self, event):
+        """페인트 이벤트 - 빠른 렌더링"""
+        painter = QPainter(self)
+        
+        if self.pixmap:
+            # 스케일링 없이 직접 그리기
+            painter.setRenderHint(QPainter.Antialiasing, False)
+            painter.drawPixmap(0, 0, self.pixmap)
+        else:
+            # 검은 화면
+            painter.fillRect(self.rect(), Qt.black)
+    
+    def update_frame(self, q_image):
+        """프레임 업데이트"""
+        if q_image is None or q_image.isNull():
+            self.pixmap = None
+        else:
+            # QImage를 QPixmap으로 직접 변환
+            self.pixmap = QPixmap.fromImage(q_image)
+        
+        self.update()  # paintEvent 호출
 
 class PSCameraUI(QMainWindow):
     def __init__(self):
@@ -20,12 +53,9 @@ class PSCameraUI(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # 카메라 화면
-        self.camera_label = QLabel("카메라 연결 중...")
-        self.camera_label.setFixedSize(640, 480)
-        self.camera_label.setAlignment(Qt.AlignCenter)
-        self.camera_label.setStyleSheet("border: 1px solid gray; background: black; color: white;")
-        layout.addWidget(self.camera_label)
+        # 카메라 화면 (빠른 위젯)
+        self.camera_widget = FastCameraWidget()
+        layout.addWidget(self.camera_widget)
         
         # 정보 패널
         self.info_widget = QWidget()
@@ -88,9 +118,7 @@ class PSCameraUI(QMainWindow):
     
     def update_camera_frame(self, q_image):
         """카메라 프레임 업데이트"""
-        if q_image:
-            pixmap = QPixmap.fromImage(q_image)
-            self.camera_label.setPixmap(pixmap)
+        self.camera_widget.update_frame(q_image)
     
     def update_info_panel(self, camera_info):
         """정보 패널 업데이트"""
@@ -143,5 +171,6 @@ class PSCameraUI(QMainWindow):
     
     def show_error(self, message):
         """오류 메시지 표시"""
-        self.camera_label.clear()
-        self.camera_label.setText(message)
+        # OpenGL 위젯에는 텍스트를 직접 표시할 수 없으므로, 검은 화면 표시
+        self.camera_widget.update_frame(None)
+        print(f"❌ 오류: {message}")

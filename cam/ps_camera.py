@@ -13,6 +13,9 @@ from ps_camera_modules.ui import PSCameraUI
 from ps_camera_modules.timer import VSyncFrameTimer
 from util import measure_time
 
+# Jetson 디스플레이 환경 설정
+# OpenGL 대신 QPainter 사용으로 변경
+
 
 # 젯슨 Wayland 디스플레이 환경 설정 (SSH 접속 시)
 def setup_wayland_environment():
@@ -202,15 +205,8 @@ class App:
     @measure_time
     def show_black_screen(self):
         """검은 화면 표시"""
-        # 640x480 검은 이미지 생성
-        black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        
-        # QImage로 변환
-        height, width, channel = black_frame.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(black_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        
-        self.ui.update_camera_frame(q_image)
+        # OpenGL 위젯에 None 전달하면 자동으로 검은 화면 표시
+        self.ui.update_camera_frame(None)
     
     def _schedule_delayed_action(self, action):
         """VSync 딜레이를 비동기로 처리 (스레드 블로킹 방지)"""
