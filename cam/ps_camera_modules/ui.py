@@ -10,7 +10,7 @@ class FastCameraWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.pixmap = None
-        self.setFixedSize(640, 480)
+        self.setFixedSize(480, 320)
         
         # 더블 버퍼링 활성화
         self.setAttribute(Qt.WA_NoSystemBackground)
@@ -29,12 +29,12 @@ class FastCameraWidget(QWidget):
             painter.fillRect(self.rect(), Qt.black)
     
     def update_frame(self, q_image):
-        """프레임 업데이트"""
+        """프레임 업데이트 - 최적화된 버전"""
         if q_image is None or q_image.isNull():
             self.pixmap = None
         else:
-            # QImage를 QPixmap으로 직접 변환
             self.pixmap = QPixmap.fromImage(q_image)
+            
         
         self.update()  # paintEvent 호출
 
