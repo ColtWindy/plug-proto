@@ -4,7 +4,7 @@ alwaysApply: true
 
 # Project Structure Guide
 
-이 프로젝트는 Jetson Orin Nano용 PySide6 + C++ 하드웨어 타이머 및 카메라 프로젝트입니다.
+이 프로젝트는 Jetson Nano Super용 PySide6 + C++ 하드웨어 타이머 및 카메라 프로젝트입니다.
 
 ## Main Entry Points
 - [main.py](mdc:main.py): 기본 메인 애플리케이션 
@@ -21,7 +21,8 @@ alwaysApply: true
 - **Libraries**: PySide6, OpenCV (opencv-python, not headless), pybind11, numpy
 
 ## Environment Requirements
-- **Platform**: Jetson Orin Nano (Ubuntu)
+- **Platform**: Jetson Nano Super (Ubuntu, Wayland)
+  - 자세한 플랫폼/하드웨어 정보는 [platform-hardware.mdc](mdc:.cursor/rules/platform-hardware.mdc) 참조
 - **Python**: 3.12+ required
 - **Display**: Wayland environment setup for SSH connections (DISPLAY=:0)
 - **Additional**: libxcb-cursor0 package required for Qt

@@ -1,0 +1,113 @@
+---
+alwaysApply: true
+---
+
+# Platform & Hardware Information
+
+## Hardware Platform
+- **Device**: Jetson Nano Super
+- **Architecture**: ARM64 (aarch64)
+- **Manufacturer**: NVIDIA
+
+## Operating System
+- **OS**: Linux (Ubuntu-based)
+- **Kernel**: 5.15.148-tegra
+- **Display Server**: Wayland
+- **Environment**: `DISPLAY=:0` for SSH with monitor connected
+
+## Graphics & Display
+
+### GPU & Graphics API Support
+- **GPU**: NVIDIA Tegra integrated GPU
+- **OpenGL**: 4.6 (공식 지원)
+- **OpenGL ES**: 3.2 (공식 지원)
+- **Vulkan**: 1.3 (공식 지원)
+- **EGL**: 1.5 (Wayland 플랫폼 지원 포함)
+
+### Wayland + OpenGL 지원 (중요!)
+**"Wayland에서 OpenGL 불가능"은 오해입니다!** Jetson은 Wayland + EGL + OpenGL을 공식 지원합니다.
+
+#### 지원되는 구성
+- ✅ Wayland + EGL + OpenGL (Desktop GL 4.6)
+- ✅ Wayland + EGL + OpenGL ES 3.2
+- ✅ Wayland + Vulkan 1.3
+- ❌ Wayland + GLX (GLX는 X11 전용)
+
+#### EGL Wayland 확장
+- `EGL_KHR_platform_wayland`
+- `EGL_WL_bind_wayland_display`
+- `EGL_WL_wayland_eglstream`
+
+### Qt Platform 설정
+- **Wayland 환경**: `QT_QPA_PLATFORM=wayland-egl` 필수
+- **OpenGL ES 사용**: `QSurfaceFormat.setRenderableType(QSurfaceFormat.OpenGLES)`
+- **GLX 대신 EGL**: Qt가 EGL 백엔드를 사용하도록 설정
+
+## Development Environment
+- **Python**: 3.12+
+- **GUI Framework**: PySide6 (Qt for Python)
+- **OpenGL Binding**: PySide6.QtOpenGL, PySide6.QtOpenGLWidgets
+- **Package Manager**: `uv`
+
+## Known Requirements
+- **Qt Dependencies**: libxcb-cursor0 (X11 호환성용)
+- **Camera SDK**: Mindvision Camera SDK (mvsdk)
+- **Video Processing**: opencv-python (headless 아님)
+
+## Performance Considerations
+- ARM 아키텍처에서 최적화된 라이브러리 사용 권장
+- GPU 가속 활용 가능 (CUDA, OpenGL)
+- 메모리 제약 고려 (모델에 따라 4GB/8GB)
+
+## Wayland + OpenGL 설정 방법
+
+### 1. Wayland 디스플레이 확인
+Weston(Wayland compositor)이 실행 중이어야 합니다:
+```bash
+# Wayland 소켓 확인
+ls /run/user/$(id -u)/wayland-*
+```
+
+### 2. Qt OpenGL 애플리케이션 설정
+```python
+import os
+from PySide6.QtGui import QSurfaceFormat
+
+# 1. Wayland EGL 플랫폼 설정
+os.environ['QT_QPA_PLATFORM'] = 'wayland-egl'
+
+# 2. OpenGL ES + EGL 포맷 설정
+fmt = QSurfaceFormat()
+fmt.setRenderableType(QSurfaceFormat.OpenGLES)  # EGL 사용 (GLX 아님!)
+fmt.setVersion(3, 2)                            # OpenGL ES 3.2
+fmt.setSwapInterval(1)                          # vsync
+QSurfaceFormat.setDefaultFormat(fmt)
+```
+
+### 3. EGL 테스트
+```bash
+# Wayland EGL 동작 확인
+weston-simple-egl
+
+# EGL Wayland 플랫폼 확인
+eglinfo | grep -i wayland -A4
+```
+
+## Troubleshooting Notes
+
+### OpenGL 컨텍스트 생성 실패 (EGL Error 3009)
+- **원인**: GLX를 사용하려고 시도 (Wayland에서 불가능)
+- **해결**: 
+  1. `QT_QPA_PLATFORM=wayland-egl` 설정
+  2. `QSurfaceFormat.setRenderableType(QSurfaceFormat.OpenGLES)` 사용
+  3. OpenGL ES 3.2 버전 지정
+
+### "안 된다"는 오해가 생기는 이유
+1. **GLX 전제 앱**: 많은 데스크톱 앱이 GLX(X11)를 전제 → Wayland에서 실패
+2. **툴킷 빌드**: Qt/툴킷이 GLES 전용 또는 GLX 전용으로 빌드된 경우
+3. **환경변수 누락**: `QT_QPA_PLATFORM=wayland-egl` 설정 안 함
+
+### SSH 접속 시 주의사항
+- Wayland 세션이 활성화되어 있어야 함 (Weston 실행 필요)
+- Wayland 소켓 경로 확인: `/run/user/$(id -u)/wayland-0`
+- X11 포워딩 방식은 Wayland에서 작동 안 함
