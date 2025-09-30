@@ -13,7 +13,9 @@ import cv2
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage
-from cam.ps_camera_modules.timer import VSyncFrameTimer
+
+# 직접 import (프로젝트 루트에서 실행 시)
+from ps_camera_modules.timer import VSyncFrameTimer
 
 # Jetson Wayland display environment setup (SSH connection) - from ps_camera.py
 def setup_wayland_environment():
