@@ -1,12 +1,12 @@
 #coding=utf-8
 """
-QOpenGLWidget 기반 프레임 드랍 방지 예제
-VSync + Triple Buffer를 사용하여 프레임 동기화
+QOpenGLWindow 기반 프레임 드랍 방지 예제
+frameSwapped 콜백을 사용하여 vsync 기반으로 프레임 동기화
 """
 import sys
 import os
-from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton
-from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget
+from PySide6.QtOpenGL import QOpenGLWindow  # Qt6부터 QtOpenGL 모듈로 분리
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor
 from PySide6.QtCore import Qt
 from OpenGL import GL
@@ -34,13 +34,17 @@ def setup_wayland_environment():
     return wayland_display, xdg_runtime_dir
 
 
-class FrameCounterWidget(QOpenGLWidget):
-    """프레임 카운터를 표시하는 OpenGL 위젯 (VSync 동기화)"""
+class FrameCounterWindow(QOpenGLWindow):
+    """프레임 카운터를 표시하는 OpenGL 윈도우"""
     
     def __init__(self):
         super().__init__()
+        self.setTitle("VSync Frame Counter (No Drop)")
         self._frame = 0
-        self._needs_update = True
+        
+        # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
+        # 표시가 끝난 직후 다음 프레임 예약 → 드랍/스킵 최소화
+        self.frameSwapped.connect(self.update, Qt.QueuedConnection)
 
     def initializeGL(self):
         """OpenGL 초기화"""
@@ -49,7 +53,7 @@ class FrameCounterWidget(QOpenGLWidget):
     def paintGL(self):
         """
         프레임 렌더링
-        VSync와 자동 동기화됨 (SwapInterval=1)
+        frameSwapped 시그널에 의해 vsync와 동기화되어 호출됨
         """
         self._frame += 1
         
@@ -63,37 +67,27 @@ class FrameCounterWidget(QOpenGLWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.TextAntialiasing)
         
-        # 프레임 번호 표시
+        w = self.width()
+        h = self.height()
+        
+        # 프레임 번호 표시 (중앙)
         painter.setFont(QFont("Arial", 72, QFont.Bold))
         painter.setPen(QColor(255, 255, 255))
-        painter.drawText(self.rect(), Qt.AlignCenter, f"{self._frame}")
+        text = f"{self._frame}"
+        painter.drawText(0, 0, w, h, Qt.AlignCenter, text)
         
         # FPS 정보 표시 (좌측 상단)
         painter.setFont(QFont("Monospace", 14))
         painter.setPen(QColor(200, 200, 200))
-        info_text = "VSync: ON | Triple Buffer | OpenGL ES 3.2"
+        info_text = "VSync: ON | Triple Buffer | frameSwapped Signal"
         painter.drawText(10, 30, info_text)
         
         painter.end()
-        
-        # 다음 프레임 예약 (VSync와 동기화)
-        if self._needs_update:
-            self.update()
-    
-    def resizeGL(self, w, h):
-        """윈도우 리사이즈 처리"""
-        GL.glViewport(0, 0, w, h)
-    
-    def showEvent(self, event):
-        """위젯이 표시될 때 연속 업데이트 시작"""
-        super().showEvent(event)
-        self._needs_update = True
-        self.update()
-    
-    def hideEvent(self, event):
-        """위젯이 숨겨질 때 업데이트 중지"""
-        super().hideEvent(event)
-        self._needs_update = False
+
+    def keyPressEvent(self, event):
+        """ESC 키로 종료"""
+        if event.key() == Qt.Key_Escape or event.key() == Qt.Key_Q:
+            self.close()
 
 
 class MainWindow(QMainWindow):
@@ -101,11 +95,15 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("VSync Frame Counter - No Drop (OpenGL ES 3.2)")
+        self.setWindowTitle("QOpenGLWindow Frame Counter - No Drop")
         
-        # OpenGL 위젯 생성
-        self.opengl_widget = FrameCounterWidget()
-        self.setCentralWidget(self.opengl_widget)
+        # OpenGL 윈도우 생성
+        self.opengl_window = FrameCounterWindow()
+        
+        # QOpenGLWindow를 QWidget 컨테이너로 변환
+        container = QWidget.createWindowContainer(self.opengl_window, self)
+        container.setMinimumSize(1024, 768)
+        self.setCentralWidget(container)
         
         # 툴바 추가
         toolbar = QToolBar("Controls")
@@ -131,7 +129,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(quit_btn)
         
         # 윈도우 크기 설정
-        self.resize(1024, 768)
+        self.resize(1024, 768 + toolbar.height())
 
     def keyPressEvent(self, event):
         """ESC 또는 Q 키로 종료"""
@@ -181,6 +179,9 @@ def main():
     
     window = MainWindow()
     window.show()
+    
+    # 초기 렌더링 트리거
+    window.opengl_window.update()
     
     sys.exit(app.exec())
 
