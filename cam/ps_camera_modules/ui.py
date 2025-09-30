@@ -6,37 +6,66 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPainter
 
 class FastCameraWidget(QWidget):
-    """빠른 카메라 표시 위젯 - QPainter 기반"""
+    """비동기 카메라 표시 위젯 - 최적화된 QPainter 기반"""
     def __init__(self):
         super().__init__()
-        self.pixmap = None
-        self.setFixedSize(480, 320)
+        self.current_pixmap = None
+        self.next_pixmap = None  # 비동기 버퍼
+        self.is_updating = False
+        self.setFixedSize(640, 480) # 확대 축소 되지 않는 사이즈 조정
         
-        # 더블 버퍼링 활성화
+        # 더블 버퍼링과 비동기 렌더링 최적화
         self.setAttribute(Qt.WA_NoSystemBackground)
         self.setAttribute(Qt.WA_OpaquePaintEvent)
+        self.setAttribute(Qt.WA_PaintOnScreen, False)  # 더블 버퍼링 강제
+        
+        # 비동기 업데이트 타이머 (프레임 드롭 방지)
+        self.update_timer = QTimer()
+        self.update_timer.setSingleShot(True)
+        self.update_timer.timeout.connect(self._apply_next_frame)
     
     def paintEvent(self, event):
-        """페인트 이벤트 - 빠른 렌더링"""
+        """비동기 페인트 이벤트 - 최적화된 렌더링"""
         painter = QPainter(self)
         
-        if self.pixmap:
-            # 스케일링 없이 직접 그리기
-            painter.setRenderHint(QPainter.Antialiasing, False)
-            painter.drawPixmap(0, 0, self.pixmap)
+        # 렌더링 힌트 비활성화로 성능 향상
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setRenderHint(QPainter.TextAntialiasing, False)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        
+        if self.current_pixmap and not self.current_pixmap.isNull():
+            # 직접 픽셀맵 복사 (스케일링 없음)
+            painter.drawPixmap(0, 0, self.current_pixmap)
         else:
-            # 검은 화면
+            # 검은 화면 - 빠른 채우기
             painter.fillRect(self.rect(), Qt.black)
     
     def update_frame(self, q_image):
-        """프레임 업데이트 - 최적화된 버전"""
-        if q_image is None or q_image.isNull():
-            self.pixmap = None
-        else:
-            self.pixmap = QPixmap.fromImage(q_image)
+        """비동기 프레임 업데이트 - VSync와 연동"""
+        if self.is_updating:
+            # 이전 업데이트가 진행 중이면 스킵 (프레임 드롭 방지)
+            return
             
+        self.is_updating = True
         
-        self.update()  # paintEvent 호출
+        if q_image is None or q_image.isNull():
+            self.next_pixmap = None
+        else:
+            # 백그라운드에서 픽셀맵 생성 (메인 스레드 블로킹 방지)
+            self.next_pixmap = QPixmap.fromImage(q_image)
+        
+        # 비동기 업데이트 스케줄링 (1ms 후 적용)
+        if not self.update_timer.isActive():
+            self.update_timer.start(1)
+    
+    def _apply_next_frame(self):
+        """다음 프레임을 안전하게 적용"""
+        self.current_pixmap = self.next_pixmap
+        self.next_pixmap = None
+        self.is_updating = False
+        
+        # 실제 화면 업데이트 (VSync와 동기화됨)
+        self.update()
 
 class PSCameraUI(QMainWindow):
     def __init__(self):
@@ -79,9 +108,6 @@ class PSCameraUI(QMainWindow):
         # 토글 버튼
         self.info_button = QPushButton("Hide Info")
         controls_layout.addWidget(self.info_button)
-        
-        
-        
         
         # 게인
         gain_layout = QHBoxLayout()
@@ -171,6 +197,6 @@ class PSCameraUI(QMainWindow):
     
     def show_error(self, message):
         """오류 메시지 표시"""
-        # OpenGL 위젯에는 텍스트를 직접 표시할 수 없으므로, 검은 화면 표시
+        # 비동기 위젯에 검은 화면 표시
         self.camera_widget.update_frame(None)
         print(f"❌ 오류: {message}")

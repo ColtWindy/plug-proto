@@ -16,7 +16,6 @@ from util import measure_time
 # Jetson 디스플레이 환경 설정
 # OpenGL 대신 QPainter 사용으로 변경
 
-
 # 젯슨 Wayland 디스플레이 환경 설정 (SSH 접속 시)
 def setup_wayland_environment():
     """Wayland 환경 설정"""
@@ -45,11 +44,17 @@ wayland_display, xdg_runtime_dir = setup_wayland_environment()
 if not wayland_display:
     print("❌ 사용 가능한 Wayland 디스플레이를 찾을 수 없습니다")
     sys.exit(1)
+else:
+    # wayland_display: wayland-0
+    print(f"Wayland 디스플레이를 찾았습니다: {wayland_display}")
 
 socket_path = os.path.join(xdg_runtime_dir, wayland_display)
 if not os.path.exists(socket_path):
     print(f"❌ Wayland 소켓이 존재하지 않습니다: {socket_path}")
     sys.exit(1)
+else:
+    # socket_path: /run/user/1000/wayland-0
+    print(f"Wayland 소켓이 존재합니다: {socket_path}")
 
 # 카메라 설정 정보
 TARGET_CAMERA_IP = "192.168.0.100"

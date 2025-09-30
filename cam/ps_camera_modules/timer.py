@@ -221,32 +221,6 @@ class VSyncFrameTimer(QObject):
         # 4. 즉시 플러시
         self.display.flush()
     
-    def get_hardware_refresh_rate(self):
-        """하드웨어 주사율 직접 가져오기"""
-        from pywayland.protocol.wayland import WlOutput
-        
-        registry = self.display.get_registry()
-        self._output = None
-        
-        # wl_output 찾기
-        registry.dispatcher["global"] = lambda r, id_, interface, version: \
-            setattr(self, '_output', r.bind(id_, WlOutput, 3)) if interface == "wl_output" else None
-        self.display.roundtrip()
-        
-        if not self._output:
-            raise RuntimeError("wl_output 인터페이스를 찾을 수 없음")
-        
-        # 현재 모드의 refresh rate 가져오기
-        self._refresh = None
-        self._output.dispatcher["mode"] = lambda o, flags, w, h, refresh: \
-            setattr(self, '_refresh', refresh / 1000.0) if flags & 1 else None
-        self.display.roundtrip()
-        
-        if not self._refresh:
-            raise RuntimeError("주사율 정보를 가져올 수 없음")
-        
-        return self._refresh
-    
     def add_frame_callback(self, callback):
         """프레임 신호 콜백 등록"""
         self.frame_signal.connect(callback)
