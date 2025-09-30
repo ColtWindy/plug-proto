@@ -53,8 +53,8 @@ class OpenGLCameraController:
             # 수동 트리거 모드 (필요시 활성화)
             mvsdk.CameraSetTriggerMode(self.hCamera, 0)  # 0: 연속 모드, 1: 트리거 모드
             
-            # 자동 노출 활성화
-            mvsdk.CameraSetAeState(self.hCamera, 1)
+            # 수동 노출 모드 (슬라이더로 제어하기 위해)
+            mvsdk.CameraSetAeState(self.hCamera, 0)  # 0: 수동, 1: 자동
             
             # 아날로그 게인 초기화
             mvsdk.CameraSetAnalogGain(self.hCamera, 0)
@@ -139,12 +139,12 @@ class OpenGLCameraController:
             mvsdk.CameraSetAnalogGain(self.hCamera, int(value))
             self.camera_info['gain'] = value
     
-    def set_exposure_range(self, max_exposure_us):
-        """노출시간 범위 설정"""
+    def set_exposure_time(self, exposure_us):
+        """노출시간 직접 설정 (수동 모드)"""
         if self.hCamera:
             try:
-                mvsdk.CameraSetAeExposureRange(self.hCamera, 1, max_exposure_us)
-                print(f"📸 노출시간 최대값: {max_exposure_us}μs")
+                mvsdk.CameraSetExposureTime(self.hCamera, exposure_us)
+                print(f"📸 노출시간: {exposure_us}μs")
             except Exception as e:
                 print(f"❌ 노출시간 설정 실패: {e}")
     

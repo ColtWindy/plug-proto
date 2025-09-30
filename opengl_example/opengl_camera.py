@@ -14,9 +14,10 @@ if project_root not in sys.path:
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPixmap, QImage
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from OpenGL import GL
 from camera_controller import OpenGLCameraController
+from cam import mvsdk
 
 
 def setup_wayland_environment():
@@ -44,16 +45,17 @@ def setup_wayland_environment():
 class CameraOpenGLWindow(QOpenGLWindow):
     """카메라 화면을 표시하는 OpenGL 윈도우 (VSync 동기화)"""
     
-    def __init__(self):
+    def __init__(self, parent_window=None):
         super().__init__()
         self.setTitle("OpenGL Camera - VSync")
         self.current_pixmap = None
         self.pending_pixmap = None
         self._frame = 0
         self.display_number = 0  # 표시할 숫자 (홀수 프레임에서만 증가)
+        self.parent_window = parent_window  # 메인 윈도우 참조
         
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
-        self.frameSwapped.connect(self.update, Qt.QueuedConnection)
+        self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
 
     def initializeGL(self):
         """OpenGL 초기화"""
@@ -127,6 +129,17 @@ class CameraOpenGLWindow(QOpenGLWindow):
         else:
             self.pending_pixmap = QPixmap.fromImage(q_image)
     
+    def on_frame_swapped(self):
+        """frameSwapped 시그널 처리 - VSync 타이밍에서 카메라 트리거"""
+        cycle_position = self._frame % 2
+        
+        # 메인 윈도우에 VSync 프레임 신호 전달
+        if self.parent_window:
+            self.parent_window.on_vsync_frame(cycle_position)
+        
+        # 다음 프레임 업데이트
+        self.update()
+    
     def keyPressEvent(self, event):
         """ESC 키로 종료"""
         if event.key() == Qt.Key_Escape or event.key() == Qt.Key_Q:
@@ -141,11 +154,21 @@ class MainWindow(QMainWindow):
         self.camera_ip = camera_ip
         self.camera = None
         self.exposure_time_ms = 10
+        self.vsync_delay_ms = 11  # VSync 딜레이 (셔터 타이밍 조정)
+        
+        # 지연 처리용 QTimer
+        self.delay_timer = QTimer()
+        self.delay_timer.setSingleShot(True)
+        
+        # 카메라 트리거용 QTimer
+        self.camera_timer = QTimer()
+        self.camera_timer.setSingleShot(True)
+        self.camera_timer.timeout.connect(self._execute_camera_trigger)
         
         self.setWindowTitle("OpenGL Camera - No Frame Drop")
         
         # OpenGL 윈도우 생성
-        self.opengl_window = CameraOpenGLWindow()
+        self.opengl_window = CameraOpenGLWindow(parent_window=self)
         
         # QOpenGLWindow를 QWidget 컨테이너로 변환
         container = QWidget.createWindowContainer(self.opengl_window, self)
@@ -218,6 +241,18 @@ class MainWindow(QMainWindow):
         exposure_layout.addWidget(self.exposure_label)
         controls_layout.addLayout(exposure_layout)
         
+        # VSync 딜레이 슬라이더 (셔터 타이밍 조정)
+        delay_layout = QHBoxLayout()
+        delay_layout.addWidget(QLabel("셔터 딜레이:"))
+        self.delay_slider = QSlider(Qt.Horizontal)
+        self.delay_slider.setRange(0, 50)
+        self.delay_slider.setValue(self.vsync_delay_ms)
+        self.delay_slider.valueChanged.connect(self.on_delay_change)
+        delay_layout.addWidget(self.delay_slider)
+        self.delay_label = QLabel(f"{self.vsync_delay_ms}ms")
+        delay_layout.addWidget(self.delay_label)
+        controls_layout.addLayout(delay_layout)
+        
         parent_layout.addWidget(controls)
 
     def setup_camera(self):
@@ -239,7 +274,11 @@ class MainWindow(QMainWindow):
         
         # 노출시간 설정
         exposure_us = self.exposure_time_ms * 1000
-        self.camera.set_exposure_range(exposure_us)
+        self.camera.set_exposure_time(exposure_us)
+        
+        # 트리거 모드 설정
+        if self.camera.hCamera:
+            mvsdk.CameraSetTriggerMode(self.camera.hCamera, 1)  # 수동 트리거 모드
         
         print(f"✅ 카메라 연결 성공: {self.camera.camera_info['name']}")
 
@@ -260,8 +299,37 @@ class MainWindow(QMainWindow):
         self.exposure_time_ms = value
         if self.camera:
             exposure_us = self.exposure_time_ms * 1000
-            self.camera.set_exposure_range(exposure_us)
+            self.camera.set_exposure_time(exposure_us)
         self.exposure_label.setText(f"{value}ms")
+    
+    def on_delay_change(self, value):
+        """VSync 딜레이 슬라이더 변경"""
+        self.vsync_delay_ms = value
+        self.delay_label.setText(f"{value}ms")
+    
+    def on_vsync_frame(self, cycle_position):
+        """VSync 프레임 신호 처리"""
+        if not self.camera or not self.camera.hCamera:
+            return
+        
+        if cycle_position == 0:
+            # 짝수 프레임: 검은 화면 표시 시점에 카메라 트리거
+            if self.vsync_delay_ms > 0:
+                # 딜레이가 있으면 타이머 사용
+                self._schedule_camera_trigger(self.vsync_delay_ms)
+            else:
+                # 딜레이 0이면 즉시 트리거
+                mvsdk.CameraSoftTrigger(self.camera.hCamera)
+    
+    def _schedule_camera_trigger(self, delay_ms):
+        """카메라 트리거 지연 실행"""
+        if not self.camera_timer.isActive():
+            self.camera_timer.start(int(delay_ms))
+    
+    def _execute_camera_trigger(self):
+        """카메라 트리거 실행"""
+        if self.camera and self.camera.hCamera:
+            mvsdk.CameraSoftTrigger(self.camera.hCamera)
 
     def keyPressEvent(self, event):
         """ESC 또는 Q 키로 종료"""
@@ -270,6 +338,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """윈도우 종료 시 정리"""
+        self.delay_timer.stop()
+        self.camera_timer.stop()
         if self.camera:
             self.camera.cleanup()
         event.accept()
