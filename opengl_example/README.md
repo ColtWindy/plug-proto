@@ -13,7 +13,7 @@ PySide6의 QOpenGL을 사용한 프레임 렌더링 예제들입니다.
 uv run opengl_example/frame_counter.py
 ```
 
-### 2. vsync_frame_counter.py ⭐ 권장
+### 2. vsync_frame_counter.py ⭐ 
 **프레임 드랍 방지** QOpenGLWindow 예제입니다.
 - `frameSwapped` 시그널 기반 vsync 동기화
 - 트리플 버퍼링으로 스톨 완화
@@ -34,30 +34,58 @@ uv run opengl_example/vsync_frame_counter.py
 - 툴바의 "종료" 버튼 클릭
 - `Q` 키 또는 `ESC` 키
 
+### 3. opengl_camera.py 🎥 실전 응용
+**QOpenGLWindow 기반 카메라 애플리케이션**
+- frameSwapped 시그널로 프레임 드랍 방지
+- Mindvision 카메라 통합
+- 실시간 게인/노출시간 제어
+- VSync 완벽 동기화
+
+```bash
+uv run opengl_example/opengl_camera.py
+```
+
+**주요 특징:**
+- 프레임 드랍 없는 카메라 표시
+- 실시간 카메라 제어 (게인, 노출시간)
+- OpenGL ES 3.2 + EGL + Wayland
+- 1024x768 해상도
+
 ## 기술 비교
 
-| 특성 | frame_counter.py | vsync_frame_counter.py |
-|------|------------------|------------------------|
-| 위젯 타입 | QOpenGLWidget | QOpenGLWindow |
-| 프레임 동기화 | QTimer (16ms) | frameSwapped (vsync) |
-| 프레임 드랍 | 가능성 있음 | 최소화 |
-| 버퍼링 | 기본 | Triple Buffer |
-| UI 버튼 | 없음 | 종료 버튼 |
-| 해상도 | 800x600 | 1024x768 |
+| 특성 | frame_counter.py | vsync_frame_counter.py | opengl_camera.py |
+|------|------------------|------------------------|------------------|
+| 위젯 타입 | QOpenGLWidget | QOpenGLWindow | QOpenGLWindow |
+| 프레임 동기화 | QTimer (16ms) | frameSwapped (vsync) | frameSwapped (vsync) |
+| 프레임 드랍 | 가능성 있음 | 최소화 | 최소화 |
+| 버퍼링 | Double | Triple | Double |
+| UI 컨트롤 | 없음 | 종료 버튼 | 카메라 제어 + 종료 |
+| 용도 | 학습용 | 데모 | 실전 카메라 |
 
 ## 필요한 패키지
 
 - PySide6
 - PyOpenGL
+- opencv-python (카메라용)
+- mvsdk (Mindvision 카메라 SDK)
 
 현재 프로젝트의 `pyproject.toml`에 이미 포함되어 있습니다.
 
 ## Jetson Nano Super 최적화
 
-Wayland 환경에서 GPU 가속을 위해 다음 환경변수 사용 가능:
-```bash
-export QT_QPA_PLATFORM=wayland-egl
-export DISPLAY=:0
+### Wayland + OpenGL ES 3.2 설정
+코드에서 자동으로 설정됩니다:
+```python
+os.environ['QT_QPA_PLATFORM'] = 'wayland-egl'
+fmt.setRenderableType(QSurfaceFormat.OpenGLES)
+fmt.setVersion(3, 2)
 ```
 
-SSH 접속 시에는 `DISPLAY=:0` 설정 필수입니다.
+### 실행 환경
+Weston(Wayland compositor)이 실행 중이어야 합니다:
+```bash
+# Wayland 확인
+ls /run/user/$(id -u)/wayland-*
+```
+
+SSH 접속 시 Weston을 먼저 시작한 후 예제를 실행하세요.
