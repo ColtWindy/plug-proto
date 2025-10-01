@@ -5,6 +5,8 @@ frameSwapped 콜백을 사용하여 프레임 드랍 방지
 """
 import sys
 import os
+import time
+import threading
 
 # 프로젝트 루트를 sys.path에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -131,9 +133,8 @@ class CameraOpenGLWindow(QOpenGLWindow):
     
     def on_frame_swapped(self):
         """frameSwapped 시그널 처리 - VSync 타이밍에서 카메라 트리거"""
+        # 메인 윈도우에 VSync 프레임 신호 전달 (렌더링 전)
         cycle_position = self._frame % 2
-        
-        # 메인 윈도우에 VSync 프레임 신호 전달
         if self.parent_window:
             self.parent_window.on_vsync_frame(cycle_position)
         
@@ -153,17 +154,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.camera_ip = camera_ip
         self.camera = None
-        self.exposure_time_ms = 10
-        self.vsync_delay_ms = 11  # VSync 딜레이 (셔터 타이밍 조정)
-        
-        # 지연 처리용 QTimer
-        self.delay_timer = QTimer()
-        self.delay_timer.setSingleShot(True)
-        
-        # 카메라 트리거용 QTimer
-        self.camera_timer = QTimer()
-        self.camera_timer.setSingleShot(True)
-        self.camera_timer.timeout.connect(self._execute_camera_trigger)
+        self.exposure_time_ms = 9
+        self.vsync_delay_ms = 17  # VSync 딜레이 (셔터 타이밍 조정)
         
         self.setWindowTitle("OpenGL Camera - No Frame Drop")
         
@@ -279,8 +271,11 @@ class MainWindow(QMainWindow):
         # 트리거 모드 설정
         if self.camera.hCamera:
             mvsdk.CameraSetTriggerMode(self.camera.hCamera, 1)  # 수동 트리거 모드
+            # 초기 트리거 발생 (첫 프레임 캡처 시작)
+            mvsdk.CameraSoftTrigger(self.camera.hCamera)
         
         print(f"✅ 카메라 연결 성공: {self.camera.camera_info['name']}")
+        print(f"🎬 초기 셔터 트리거 발생")
 
     def on_new_camera_frame(self, q_image):
         """카메라에서 새 프레임이 도착했을 때"""
@@ -308,26 +303,44 @@ class MainWindow(QMainWindow):
         self.delay_label.setText(f"{value}ms")
     
     def on_vsync_frame(self, cycle_position):
-        """VSync 프레임 신호 처리"""
+        """VSync 프레임 신호 처리 - 고정밀 타이밍"""
         if not self.camera or not self.camera.hCamera:
             return
         
         if cycle_position == 0:
             # 짝수 프레임: 검은 화면 표시 시점에 카메라 트리거
             if self.vsync_delay_ms > 0:
-                # 딜레이가 있으면 타이머 사용
-                self._schedule_camera_trigger(self.vsync_delay_ms)
+                # 고정밀 딜레이를 위해 별도 스레드에서 처리
+                threading.Thread(
+                    target=self._precise_delay_trigger,
+                    args=(self.vsync_delay_ms,),
+                    daemon=True
+                ).start()
             else:
                 # 딜레이 0이면 즉시 트리거
                 mvsdk.CameraSoftTrigger(self.camera.hCamera)
     
-    def _schedule_camera_trigger(self, delay_ms):
-        """카메라 트리거 지연 실행"""
-        if not self.camera_timer.isActive():
-            self.camera_timer.start(int(delay_ms))
-    
-    def _execute_camera_trigger(self):
-        """카메라 트리거 실행"""
+    def _precise_delay_trigger(self, delay_ms):
+        """
+        고정밀 딜레이 후 카메라 트리거
+        busy-wait 방식으로 마이크로초 수준의 정확도 보장
+        """
+        if delay_ms <= 0:
+            return
+        
+        # 시작 시간 기록
+        start_time = time.perf_counter()
+        target_time = start_time + (delay_ms / 1000.0)
+        
+        # busy-wait: 1ms 전까지는 sleep
+        while time.perf_counter() < target_time - 0.001:
+            time.sleep(0.0001)  # 100 마이크로초 sleep
+        
+        # 마지막 1ms는 busy-wait으로 정확도 보장
+        while time.perf_counter() < target_time:
+            pass
+        
+        # 정확한 시점에 트리거
         if self.camera and self.camera.hCamera:
             mvsdk.CameraSoftTrigger(self.camera.hCamera)
 
@@ -338,8 +351,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """윈도우 종료 시 정리"""
-        self.delay_timer.stop()
-        self.camera_timer.stop()
         if self.camera:
             self.camera.cleanup()
         event.accept()
