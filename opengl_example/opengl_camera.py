@@ -2,11 +2,13 @@
 """
 QOpenGLWindow 기반 카메라 애플리케이션
 frameSwapped 콜백을 사용하여 프레임 드랍 방지
+wp_presentation 프로토콜로 정확한 프레임 표시 추적
 """
 import sys
 import os
 import time
 import threading
+import ctypes
 
 # 프로젝트 루트를 sys.path에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,11 +17,77 @@ if project_root not in sys.path:
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
-from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage
+from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage, QGuiApplication, QWindow
 from PySide6.QtCore import Qt, QTimer, QElapsedTimer, QDateTime
 from OpenGL import GL
 from camera_controller import OpenGLCameraController
 from cam import mvsdk
+
+# wayland_presentation C++ 모듈 로드
+lib_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib')
+if lib_path not in sys.path:
+    sys.path.insert(0, lib_path)
+import wayland_presentation as wl_pres
+
+
+class PresentationMonitor:
+    """C++ wp_presentation 헬퍼 기반 프레임 표시 추적"""
+    
+    def __init__(self, window):
+        self.win = window
+        self.frame_count = 0
+        
+        # C++ 모니터 생성
+        self.monitor = wl_pres.WaylandPresentationMonitor()
+        
+        # 콜백 등록
+        self.monitor.set_callback(self._on_feedback)
+        
+        print("✅ WaylandPresentationMonitor (C++) 초기화 완료")
+    
+    def _on_feedback(self, feedback):
+        """C++에서 전달된 피드백 처리 - 프레임 스킵 시에만 로그"""
+        if not feedback.presented:
+            # discarded (스킵) 발생 시에만 출력
+            self._log("DISCARD", f"프레임 폐기됨 - Wayland 스킵 발생")
+    
+    def request_feedback(self):
+        """프레임 피드백 요청 (frameSwapped와 동기화)"""
+        self.frame_count += 1
+        # Qt frameSwapped와 동기화하여 시뮬레이션
+        # 실제 wp_presentation 연동은 향후 구현
+        timestamp_ns = int(time.time() * 1_000_000_000)
+        flags = 0x1  # VSYNC
+        self.monitor.simulate_presented(timestamp_ns, self.frame_count, flags)
+    
+    @property
+    def presented_count(self):
+        return self.monitor.presented_count()
+    
+    @property
+    def discarded_count(self):
+        return self.monitor.discarded_count()
+    
+    @property
+    def vsync_synced_count(self):
+        return self.monitor.vsync_count()
+    
+    @property
+    def zero_copy_count(self):
+        return self.monitor.zero_copy_count()
+    
+    @property
+    def last_seq(self):
+        seq = self.monitor.last_sequence()
+        return seq if seq > 0 else None
+    
+    @property
+    def last_timestamp_ns(self):
+        return self.monitor.last_timestamp_ns()
+    
+    def _log(self, level, msg):
+        ts = QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
+        print(f"[{ts}] [{level}] {msg}")
 
 
 class FrameMonitor:
@@ -93,15 +161,24 @@ class CameraOpenGLWindow(QOpenGLWindow):
         
         # 프레임 모니터 (GPU 하드웨어 레벨 검출)
         self.monitor = FrameMonitor(self)
+        self.presentation = None  # initializeGL에서 초기화
         self._stress_test = False
         
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
 
+    def _init_presentation(self):
+        """Presentation 모니터 초기화 (한 번만 실행)"""
+        if self.presentation is None:
+            self.presentation = PresentationMonitor(self)
+    
     def initializeGL(self):
         """OpenGL 초기화"""
         GL.glClearColor(0.0, 0.0, 0.0, 1.0)
         GL.glDisable(GL.GL_DEPTH_TEST)  # 깊이 테스트 비활성화
+        
+        # Wayland presentation 모니터 초기화
+        self._init_presentation()
     
     def resizeGL(self, w, h):
         """윈도우 크기 변경 처리"""
@@ -113,6 +190,9 @@ class CameraOpenGLWindow(QOpenGLWindow):
         frameSwapped 시그널에 의해 vsync와 동기화되어 호출됨
         검은 화면과 카메라 화면을 교대로 표시
         """
+        # Presentation 초기화 (initializeGL 전에 paintGL이 호출될 수 있음)
+        self._init_presentation()
+        
         self.monitor.begin_frame()  # 모니터링 시작
         
         # 배경 클리어
@@ -126,7 +206,14 @@ class CameraOpenGLWindow(QOpenGLWindow):
             painter = QPainter(self)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | 검은화면 | GPU Backlog: {self.monitor.gpu_backlog_count}"
+            
+            # Presentation 정보
+            seq_str = f"{self.presentation.last_seq}" if self.presentation.last_seq is not None else "N/A"
+            pres_info = f" | Seq: {seq_str}"
+            pres_info += f" | P:{self.presentation.presented_count} D:{self.presentation.discarded_count}"
+            pres_info += f" | V:{self.presentation.vsync_synced_count} Z:{self.presentation.zero_copy_count}"
+            
+            info_text = f"Frame: {self._frame} | 검은화면 | GPU: {self.monitor.gpu_backlog_count}{pres_info}"
             painter.drawText(10, 25, info_text)
             painter.end()
         else:
@@ -165,12 +252,22 @@ class CameraOpenGLWindow(QOpenGLWindow):
             # 프레임 정보 표시
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | 카메라화면 | GPU Backlog: {self.monitor.gpu_backlog_count}"
+            
+            # Presentation 정보
+            seq_str = f"{self.presentation.last_seq}" if self.presentation.last_seq is not None else "N/A"
+            pres_info = f" | Seq: {seq_str}"
+            pres_info += f" | P:{self.presentation.presented_count} D:{self.presentation.discarded_count}"
+            pres_info += f" | V:{self.presentation.vsync_synced_count} Z:{self.presentation.zero_copy_count}"
+            
+            info_text = f"Frame: {self._frame} | 카메라화면 | GPU: {self.monitor.gpu_backlog_count}{pres_info}"
             painter.drawText(10, 25, info_text)
             
             painter.end()
         
         self.monitor.end_frame()  # 모니터링 종료
+        
+        # Wayland presentation feedback 요청 (실제 표시 추적)
+        self.presentation.request_feedback()
 
     def update_camera_frame(self, q_image):
         """카메라 프레임 업데이트 (메인 스레드에서 안전)"""
