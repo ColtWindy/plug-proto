@@ -112,7 +112,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.current_pixmap = None
         self.pending_pixmap = None
         self._frame = 0
-        self.display_number = 0
+        self.show_black = True  # True: 검은 화면, False: 카메라 화면
         self.parent_window = parent_window
         
         # 스케일 캐시 (성능 최적화)
@@ -143,33 +143,26 @@ class CameraOpenGLWindow(QOpenGLWindow):
         """
         프레임 렌더링
         frameSwapped 시그널에 의해 vsync와 동기화되어 호출됨
-        짝수 프레임: 검은 화면, 홀수 프레임: 카메라 화면
+        검은 화면과 카메라 화면을 교대로 표시
         """
         self.monitor.begin_frame()  # 모니터링 시작
         
-        self._frame += 1
-        cycle_position = self._frame % 2
-        
-        # 배경 클리어 (깊이 버퍼 제거)
+        # 배경 클리어
         GL.glClear(GL.GL_COLOR_BUFFER_BIT)
         
         w = self.width()
         h = self.height()
         
-        if cycle_position == 0:
-            # 짝수 프레임: 검은 화면 (OpenGL 클리어만 사용, QPainter 생략)
-            # 텍스트만 표시
+        if self.show_black:
+            # 검은 화면 - 텍스트만 표시
             painter = QPainter(self)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 검은화면 | Drop: {self.monitor.drop_count}"
+            info_text = f"Frame: {self._frame} | 검은화면 | Drop: {self.monitor.drop_count}"
             painter.drawText(10, 25, info_text)
             painter.end()
-            
         else:
-            # 홀수 프레임: 카메라 화면
-            self.display_number += 1
-            
+            # 카메라 화면
             # 대기 중인 픽셀맵이 있으면 교체
             if self.pending_pixmap is not None:
                 self.current_pixmap = self.pending_pixmap
@@ -204,7 +197,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
             # 프레임 정보 표시
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 카메라화면 | Drop: {self.monitor.drop_count}"
+            info_text = f"Frame: {self._frame} | 카메라화면 | Drop: {self.monitor.drop_count}"
             painter.drawText(10, 25, info_text)
             
             painter.end()
@@ -220,10 +213,15 @@ class CameraOpenGLWindow(QOpenGLWindow):
     
     def on_frame_swapped(self):
         """frameSwapped 시그널 처리 - VSync 타이밍에서 카메라 트리거"""
-        # 메인 윈도우에 VSync 프레임 신호 전달 (렌더링 전)
-        cycle_position = self._frame % 2
-        if self.parent_window:
-            self.parent_window.on_vsync_frame(cycle_position)
+        # 프레임 번호 증가 (vsync 호출될 때마다 증가)
+        self._frame += 1
+        
+        # 메인 윈도우에 VSync 프레임 신호 전달 (검은 화면일 때 트리거)
+        if self.parent_window and self.show_black:
+            self.parent_window.on_vsync_frame()
+        
+        # 다음 프레임은 반대 상태로 스위칭
+        self.show_black = not self.show_black
         
         # 다음 프레임 업데이트
         self.update()
@@ -416,18 +414,17 @@ class MainWindow(QMainWindow):
         self.stress_btn.setText(f"부하 테스트 {status}")
         print(f"{'🔥 부하 테스트 활성화 (30ms 지연)' if self.opengl_window._stress_test else '✅ 부하 테스트 비활성화'}")
     
-    def on_vsync_frame(self, cycle_position):
-        """VSync 프레임 신호 처리 - 고정밀 타이밍"""
+    def on_vsync_frame(self):
+        """VSync 프레임 신호 처리 - 검은 화면일 때 카메라 트리거"""
         if not self.camera or not self.camera.hCamera:
             return
         
-        if cycle_position == 0:
-            # 짝수 프레임: 검은 화면 표시 시점에 카메라 트리거
-            threading.Thread(
-                target=self._precise_delay_trigger,
-                args=(self.vsync_delay_ms,),
-                daemon=True
-            ).start()
+        # 검은 화면 표시 시점에 카메라 트리거
+        threading.Thread(
+            target=self._precise_delay_trigger,
+            args=(self.vsync_delay_ms,),
+            daemon=True
+        ).start()
     
     def _precise_delay_trigger(self, delay_ms):
         """
