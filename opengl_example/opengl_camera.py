@@ -49,13 +49,11 @@ class PresentationMonitor:
         """C++에서 전달된 피드백 처리 - 프레임 스킵 시에만 로그"""
         if not feedback.presented:
             # discarded (스킵) 발생 시에만 출력
-            self._log("DISCARD", f"프레임 폐기됨 - Wayland 스킵 발생")
+            self._log("PRESENTATION", f"📊 프레임 폐기 기록됨 (Wayland/GPU 스킵 감지됨)")
     
     def request_feedback(self):
-        """프레임 피드백 요청 (frameSwapped와 동기화)"""
+        """정상 프레임 통계 업데이트"""
         self.frame_count += 1
-        # Qt frameSwapped와 동기화하여 시뮬레이션
-        # 실제 wp_presentation 연동은 향후 구현
         timestamp_ns = int(time.time() * 1_000_000_000)
         flags = 0x1  # VSYNC
         self.monitor.simulate_presented(timestamp_ns, self.frame_count, flags)
@@ -97,14 +95,18 @@ class FrameMonitor:
         self.win = window
         self.last_fence = None
         self.gpu_backlog_count = 0
+        self.last_backlog_detected = False  # 이번 프레임에 backlog 발생했는지
     
     def begin_frame(self):
         """paintGL 시작 직전 - GPU 백로그 검사"""
+        self.last_backlog_detected = False
+        
         if self.last_fence:
             status = GL.glClientWaitSync(self.last_fence, 0, 0)
             if status == GL.GL_TIMEOUT_EXPIRED:
                 self.gpu_backlog_count += 1
-                self._log("GPU", "GPU backlog - 이전 프레임 미완료")
+                self.last_backlog_detected = True
+                self._log("GPU_BLOCK", "🚨 GPU 블록 - 이전 프레임 미완료 (실제 감지)")
             GL.glDeleteSync(self.last_fence)
             self.last_fence = None
     
@@ -164,6 +166,10 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.presentation = None  # initializeGL에서 초기화
         self._stress_test = False
         
+        # Wayland 프레임 스킵 감지
+        self._last_swap_time = None
+        self._expected_frame_time_ms = 16.67  # 60Hz 기준
+        
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
 
@@ -193,7 +199,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
         # Presentation 초기화 (initializeGL 전에 paintGL이 호출될 수 있음)
         self._init_presentation()
         
-        self.monitor.begin_frame()  # 모니터링 시작
+        self.monitor.begin_frame()  # 모니터링 시작 (GPU fence 체크)
         
         # 배경 클리어
         GL.glClear(GL.GL_COLOR_BUFFER_BIT)
@@ -264,10 +270,12 @@ class CameraOpenGLWindow(QOpenGLWindow):
             
             painter.end()
         
-        self.monitor.end_frame()  # 모니터링 종료
+        self.monitor.end_frame()  # 모니터링 종료 (GPU fence 설정)
         
-        # Wayland presentation feedback 요청 (실제 표시 추적)
-        self.presentation.request_feedback()
+        # Presentation 통계 업데이트 (정상 프레임만 카운트)
+        # 실제 스킵은 GPU fence와 frameSwapped 간격으로 감지됨
+        if not self.monitor.last_backlog_detected:
+            self.presentation.request_feedback()
 
     def update_camera_frame(self, q_image):
         """카메라 프레임 업데이트 (메인 스레드에서 안전)"""
@@ -281,6 +289,21 @@ class CameraOpenGLWindow(QOpenGLWindow):
         # 프레임 번호 증가 (vsync 호출될 때마다 증가)
         self._frame += 1
         
+        # Wayland 프레임 스킵 감지 (실제 swap 간격 체크)
+        current_time = time.perf_counter() * 1000  # ms
+        if self._last_swap_time is not None:
+            swap_interval = current_time - self._last_swap_time
+            # 예상 시간의 1.5배 이상이면 프레임 스킵 발생
+            if swap_interval > self._expected_frame_time_ms * 1.5:
+                skipped_frames = int(swap_interval / self._expected_frame_time_ms) - 1
+                self._log("WAYLAND_SKIP", 
+                         f"🚨 Wayland 프레임 스킵 감지 - {skipped_frames}프레임, 간격: {swap_interval:.2f}ms (실제 감지)")
+                # Presentation에 기록
+                if self.presentation:
+                    self.presentation.monitor.simulate_discarded()
+        
+        self._last_swap_time = current_time
+        
         # 메인 윈도우에 VSync 프레임 신호 전달 (검은 화면일 때 트리거)
         if self.parent_window and self.show_black:
             self.parent_window.on_vsync_frame()
@@ -290,6 +313,11 @@ class CameraOpenGLWindow(QOpenGLWindow):
         
         # 다음 프레임 업데이트
         self.update()
+    
+    def _log(self, level, msg):
+        """로그 출력"""
+        ts = QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
+        print(f"[{ts}] [{level}] {msg}")
     
     def keyPressEvent(self, event):
         """ESC 키로 종료"""
