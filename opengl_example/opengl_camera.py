@@ -64,6 +64,10 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self._info_font = QFont("Monospace", 12)
         self._info_pen = QPen(QColor(0, 255, 0))
         
+        # 프레임 드랍 검출
+        self._is_painting = False
+        self._drop_count = 0
+        
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
 
@@ -82,6 +86,12 @@ class CameraOpenGLWindow(QOpenGLWindow):
         frameSwapped 시그널에 의해 vsync와 동기화되어 호출됨
         짝수 프레임: 검은 화면, 홀수 프레임: 카메라 화면
         """
+        # 프레임 드랍 검출
+        if self._is_painting:
+            self._drop_count += 1
+            print(f"⚠️ 프레임 드랍 감지! (#{self._drop_count}) - 이전 paintGL 아직 실행 중")
+        
+        self._is_painting = True
         self._frame += 1
         cycle_position = self._frame % 2
         
@@ -97,7 +107,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
             painter = QPainter(self)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 검은화면"
+            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 검은화면 | Drop: {self._drop_count}"
             painter.drawText(10, 25, info_text)
             painter.end()
             
@@ -135,10 +145,13 @@ class CameraOpenGLWindow(QOpenGLWindow):
             # 프레임 정보 표시
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 카메라화면"
+            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 카메라화면 | Drop: {self._drop_count}"
             painter.drawText(10, 25, info_text)
             
             painter.end()
+        
+        # paintGL 완료
+        self._is_painting = False
 
     def update_camera_frame(self, q_image):
         """카메라 프레임 업데이트 (메인 스레드에서 안전)"""
