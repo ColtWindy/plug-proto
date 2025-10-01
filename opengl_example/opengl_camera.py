@@ -15,7 +15,7 @@ if project_root not in sys.path:
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
-from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPixmap, QImage
+from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage
 from PySide6.QtCore import Qt, QTimer
 from OpenGL import GL
 from camera_controller import OpenGLCameraController
@@ -53,8 +53,16 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.current_pixmap = None
         self.pending_pixmap = None
         self._frame = 0
-        self.display_number = 0  # 표시할 숫자 (홀수 프레임에서만 증가)
-        self.parent_window = parent_window  # 메인 윈도우 참조
+        self.display_number = 0
+        self.parent_window = parent_window
+        
+        # 스케일 캐시 (성능 최적화)
+        self._scaled_cache = None
+        self._cache_key = None  # (pixmap.cacheKey(), w, h)
+        
+        # 텍스트 렌더링 캐시
+        self._info_font = QFont("Monospace", 12)
+        self._info_pen = QPen(QColor(0, 255, 0))
         
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
@@ -62,6 +70,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
     def initializeGL(self):
         """OpenGL 초기화"""
         GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        GL.glDisable(GL.GL_DEPTH_TEST)  # 깊이 테스트 비활성화
     
     def resizeGL(self, w, h):
         """윈도우 크기 변경 처리"""
@@ -76,53 +85,60 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self._frame += 1
         cycle_position = self._frame % 2
         
-        # 배경 클리어
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-        
-        # QPainter로 렌더링
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        # 배경 클리어 (깊이 버퍼 제거)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
         
         w = self.width()
         h = self.height()
         
         if cycle_position == 0:
-            # 짝수 프레임: 검은 화면만 표시
-            painter.fillRect(0, 0, w, h, QColor(0, 0, 0))
+            # 짝수 프레임: 검은 화면 (OpenGL 클리어만 사용, QPainter 생략)
+            # 텍스트만 표시
+            painter = QPainter(self)
+            painter.setFont(self._info_font)
+            painter.setPen(self._info_pen)
+            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 검은화면"
+            painter.drawText(10, 25, info_text)
+            painter.end()
             
         else:
-            # 홀수 프레임: 카메라 화면 + 숫자 표시
+            # 홀수 프레임: 카메라 화면
             self.display_number += 1
             
             # 대기 중인 픽셀맵이 있으면 교체
             if self.pending_pixmap is not None:
                 self.current_pixmap = self.pending_pixmap
                 self.pending_pixmap = None
+                # 캐시 무효화
+                self._cache_key = None
+            
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
             
             # 카메라 이미지 표시
             if self.current_pixmap and not self.current_pixmap.isNull():
-                # 윈도우 크기에 맞춰 스케일링 (비율 유지)
-                scaled_pixmap = self.current_pixmap.scaled(
-                    w, h, 
-                    Qt.KeepAspectRatio, 
-                    Qt.SmoothTransformation
-                )
-                # 중앙 정렬
-                x = (w - scaled_pixmap.width()) // 2
-                y = (h - scaled_pixmap.height()) // 2
-                painter.drawPixmap(x, y, scaled_pixmap)
-            else:
-                # 카메라 이미지가 없으면 검은 화면
-                painter.fillRect(0, 0, w, h, QColor(0, 0, 0))
-        
-        # 프레임 정보 표시 (좌측 상단, 항상 표시)
-        painter.setFont(QFont("Monospace", 12))
-        painter.setPen(QColor(0, 255, 0))
-        cycle_name = "검은화면" if cycle_position == 0 else "카메라화면"
-        info_text = f"Frame: {self._frame} | Num: {self.display_number} | {cycle_name}"
-        painter.drawText(10, 25, info_text)
-        
-        painter.end()
+                # 스케일 캐시: 창 크기나 이미지가 바뀔 때만 스케일
+                key = (self.current_pixmap.cacheKey(), w, h)
+                if key != self._cache_key:
+                    self._scaled_cache = self.current_pixmap.scaled(
+                        w, h, 
+                        Qt.KeepAspectRatio, 
+                        Qt.FastTransformation  # 빠른 변환
+                    )
+                    self._cache_key = key
+                
+                # 캐시된 스케일 이미지 사용
+                x = (w - self._scaled_cache.width()) // 2
+                y = (h - self._scaled_cache.height()) // 2
+                painter.drawPixmap(x, y, self._scaled_cache)
+            
+            # 프레임 정보 표시
+            painter.setFont(self._info_font)
+            painter.setPen(self._info_pen)
+            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 카메라화면"
+            painter.drawText(10, 25, info_text)
+            
+            painter.end()
 
     def update_camera_frame(self, q_image):
         """카메라 프레임 업데이트 (메인 스레드에서 안전)"""
@@ -376,8 +392,7 @@ def main():
     fmt.setVersion(3, 2)                              # OpenGL ES 3.2
     fmt.setSwapInterval(1)                            # vsync 활성화
     fmt.setSwapBehavior(QSurfaceFormat.DoubleBuffer)  # Double Buffer
-    fmt.setDepthBufferSize(24)
-    fmt.setStencilBufferSize(8)
+    fmt.setDepthBufferSize(0)                         # 깊이 버퍼 비활성화 (성능 최적화)
     QSurfaceFormat.setDefaultFormat(fmt)
     
     print(f"🎨 OpenGL ES 3.2 + EGL + Wayland + VSync 설정 완료")
