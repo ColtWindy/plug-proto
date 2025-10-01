@@ -309,36 +309,28 @@ class MainWindow(QMainWindow):
         
         if cycle_position == 0:
             # 짝수 프레임: 검은 화면 표시 시점에 카메라 트리거
-            if self.vsync_delay_ms > 0:
-                # 고정밀 딜레이를 위해 별도 스레드에서 처리
-                threading.Thread(
-                    target=self._precise_delay_trigger,
-                    args=(self.vsync_delay_ms,),
-                    daemon=True
-                ).start()
-            else:
-                # 딜레이 0이면 즉시 트리거
-                mvsdk.CameraSoftTrigger(self.camera.hCamera)
+            threading.Thread(
+                target=self._precise_delay_trigger,
+                args=(self.vsync_delay_ms,),
+                daemon=True
+            ).start()
     
     def _precise_delay_trigger(self, delay_ms):
         """
         고정밀 딜레이 후 카메라 트리거
         busy-wait 방식으로 마이크로초 수준의 정확도 보장
         """
-        if delay_ms <= 0:
-            return
-        
-        # 시작 시간 기록
-        start_time = time.perf_counter()
-        target_time = start_time + (delay_ms / 1000.0)
-        
-        # busy-wait: 1ms 전까지는 sleep
-        while time.perf_counter() < target_time - 0.001:
-            time.sleep(0.0001)  # 100 마이크로초 sleep
-        
-        # 마지막 1ms는 busy-wait으로 정확도 보장
-        while time.perf_counter() < target_time:
-            pass
+        if delay_ms > 0:
+            start_time = time.perf_counter()
+            target_time = start_time + (delay_ms / 1000.0)
+            
+            # busy-wait: 1ms 전까지는 sleep
+            while time.perf_counter() < target_time - 0.001:
+                time.sleep(0.0001)  # 100 마이크로초 sleep
+            
+            # 마지막 1ms는 busy-wait으로 정확도 보장
+            while time.perf_counter() < target_time:
+                pass
         
         # 정확한 시점에 트리거
         if self.camera and self.camera.hCamera:
