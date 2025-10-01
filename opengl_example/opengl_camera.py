@@ -23,58 +23,26 @@ from cam import mvsdk
 
 
 class FrameMonitor:
-    """프레임 드랍/스킵 정밀 검출"""
+    """GPU 하드웨어 레벨 프레임 검출"""
     
-    def __init__(self, window, expected_hz=60.0):
+    def __init__(self, window):
         self.win = window
-        screen = self.win.screen() if hasattr(self.win, "screen") else None
-        hz = screen.refreshRate() if screen and screen.refreshRate() > 1.0 else expected_hz
-        self.target_ms = 1000.0 / hz
-        
-        self.swap_timer = QElapsedTimer()
-        self.cpu_timer = QElapsedTimer()
-        self.last_swap_ms = None
-        self.frame_idx = 0
         self.last_fence = None
-        self.drop_count = 0
-        
-        # frameSwapped 연결
-        if hasattr(self.win, "frameSwapped"):
-            self.win.frameSwapped.connect(self._on_swap)
-        
-        self.swap_timer.start()
+        self.gpu_backlog_count = 0
     
     def begin_frame(self):
-        """paintGL 시작 직전"""
-        self.cpu_timer.start()
-        
-        # GPU 백로그 검사
+        """paintGL 시작 직전 - GPU 백로그 검사"""
         if self.last_fence:
             status = GL.glClientWaitSync(self.last_fence, 0, 0)
             if status == GL.GL_TIMEOUT_EXPIRED:
+                self.gpu_backlog_count += 1
                 self._log("GPU", "GPU backlog - 이전 프레임 미완료")
             GL.glDeleteSync(self.last_fence)
             self.last_fence = None
     
     def end_frame(self):
-        """paintGL 끝 직후"""
+        """paintGL 끝 직후 - GPU fence 설정"""
         self.last_fence = GL.glFenceSync(GL.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
-        
-        cpu_ms = self.cpu_timer.elapsed()
-        if cpu_ms > 0.8 * self.target_ms:
-            self._log("CPU", f"느린 렌더링: {cpu_ms:.2f}ms (예산: {self.target_ms:.2f}ms)")
-    
-    def _on_swap(self):
-        """frameSwapped 시 호출"""
-        now_ms = self.swap_timer.elapsed()
-        if self.last_swap_ms is not None:
-            delta = now_ms - self.last_swap_ms
-            missed = int(round(delta / self.target_ms)) - 1
-            if missed > 0:
-                self.drop_count += 1
-                self._log("DROP", f"프레임 스킵 {missed}개 - 간격: {delta:.2f}ms (목표: {self.target_ms:.2f}ms)")
-        self.last_swap_ms = now_ms
-        self.frame_idx += 1
     
     def _log(self, level, msg):
         ts = QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
@@ -123,8 +91,8 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self._info_font = QFont("Monospace", 12)
         self._info_pen = QPen(QColor(0, 255, 0))
         
-        # 프레임 모니터 (정밀 드랍 검출)
-        self.monitor = FrameMonitor(self, expected_hz=60.0)
+        # 프레임 모니터 (GPU 하드웨어 레벨 검출)
+        self.monitor = FrameMonitor(self)
         self._stress_test = False
         
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
@@ -158,7 +126,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
             painter = QPainter(self)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | 검은화면 | Drop: {self.monitor.drop_count}"
+            info_text = f"Frame: {self._frame} | 검은화면 | GPU Backlog: {self.monitor.gpu_backlog_count}"
             painter.drawText(10, 25, info_text)
             painter.end()
         else:
@@ -197,7 +165,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
             # 프레임 정보 표시
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | 카메라화면 | Drop: {self.monitor.drop_count}"
+            info_text = f"Frame: {self._frame} | 카메라화면 | GPU Backlog: {self.monitor.gpu_backlog_count}"
             painter.drawText(10, 25, info_text)
             
             painter.end()
