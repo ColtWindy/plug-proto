@@ -117,8 +117,16 @@ class OpenGLCameraController:
                 text = str(self.frame_number)
                 # 이미지 크기에 비례한 폰트 크기
                 font_scale = width / 200.0
-                thickness = max(1, int(width / 160))
-                cv2.putText(frame, text, (width//2 - int(50 * font_scale), height//2), 
+                thickness = max(6, int(width / 80))  # 더 두껍게 (160 → 80)
+                
+                # 텍스트 크기 계산하여 정확한 중앙 배치
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    text, cv2.FONT_HERSHEY_SIMPLEX, font_scale * 4, thickness
+                )
+                x = (width - text_width) // 2
+                y = (height + text_height) // 2
+                
+                cv2.putText(frame, text, (x, y), 
                            cv2.FONT_HERSHEY_SIMPLEX, font_scale * 4, (255, 255, 255), thickness)
             
             # QImage로 변환
