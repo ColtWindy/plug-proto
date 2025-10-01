@@ -16,10 +16,69 @@ if project_root not in sys.path:
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QElapsedTimer, QDateTime
 from OpenGL import GL
 from camera_controller import OpenGLCameraController
 from cam import mvsdk
+
+
+class FrameMonitor:
+    """프레임 드랍/스킵 정밀 검출"""
+    
+    def __init__(self, window, expected_hz=60.0):
+        self.win = window
+        screen = self.win.screen() if hasattr(self.win, "screen") else None
+        hz = screen.refreshRate() if screen and screen.refreshRate() > 1.0 else expected_hz
+        self.target_ms = 1000.0 / hz
+        
+        self.swap_timer = QElapsedTimer()
+        self.cpu_timer = QElapsedTimer()
+        self.last_swap_ms = None
+        self.frame_idx = 0
+        self.last_fence = None
+        self.drop_count = 0
+        
+        # frameSwapped 연결
+        if hasattr(self.win, "frameSwapped"):
+            self.win.frameSwapped.connect(self._on_swap)
+        
+        self.swap_timer.start()
+    
+    def begin_frame(self):
+        """paintGL 시작 직전"""
+        self.cpu_timer.start()
+        
+        # GPU 백로그 검사
+        if self.last_fence:
+            status = GL.glClientWaitSync(self.last_fence, 0, 0)
+            if status == GL.GL_TIMEOUT_EXPIRED:
+                self._log("GPU", "GPU backlog - 이전 프레임 미완료")
+            GL.glDeleteSync(self.last_fence)
+            self.last_fence = None
+    
+    def end_frame(self):
+        """paintGL 끝 직후"""
+        self.last_fence = GL.glFenceSync(GL.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+        
+        cpu_ms = self.cpu_timer.elapsed()
+        if cpu_ms > 0.8 * self.target_ms:
+            self._log("CPU", f"느린 렌더링: {cpu_ms:.2f}ms (예산: {self.target_ms:.2f}ms)")
+    
+    def _on_swap(self):
+        """frameSwapped 시 호출"""
+        now_ms = self.swap_timer.elapsed()
+        if self.last_swap_ms is not None:
+            delta = now_ms - self.last_swap_ms
+            missed = int(round(delta / self.target_ms)) - 1
+            if missed > 0:
+                self.drop_count += 1
+                self._log("DROP", f"프레임 스킵 {missed}개 - 간격: {delta:.2f}ms (목표: {self.target_ms:.2f}ms)")
+        self.last_swap_ms = now_ms
+        self.frame_idx += 1
+    
+    def _log(self, level, msg):
+        ts = QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
+        print(f"[{ts}] [{level}] {msg}")
 
 
 def setup_wayland_environment():
@@ -64,9 +123,9 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self._info_font = QFont("Monospace", 12)
         self._info_pen = QPen(QColor(0, 255, 0))
         
-        # 프레임 드랍 검출
-        self._is_painting = False
-        self._drop_count = 0
+        # 프레임 모니터 (정밀 드랍 검출)
+        self.monitor = FrameMonitor(self, expected_hz=60.0)
+        self._stress_test = False
         
         # frameSwapped 시그널을 사용하여 vsync 기반 프레임 업데이트
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
@@ -86,12 +145,8 @@ class CameraOpenGLWindow(QOpenGLWindow):
         frameSwapped 시그널에 의해 vsync와 동기화되어 호출됨
         짝수 프레임: 검은 화면, 홀수 프레임: 카메라 화면
         """
-        # 프레임 드랍 검출
-        if self._is_painting:
-            self._drop_count += 1
-            print(f"⚠️ 프레임 드랍 감지! (#{self._drop_count}) - 이전 paintGL 아직 실행 중")
+        self.monitor.begin_frame()  # 모니터링 시작
         
-        self._is_painting = True
         self._frame += 1
         cycle_position = self._frame % 2
         
@@ -107,7 +162,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
             painter = QPainter(self)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 검은화면 | Drop: {self._drop_count}"
+            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 검은화면 | Drop: {self.monitor.drop_count}"
             painter.drawText(10, 25, info_text)
             painter.end()
             
@@ -142,16 +197,19 @@ class CameraOpenGLWindow(QOpenGLWindow):
                 y = (h - self._scaled_cache.height()) // 2
                 painter.drawPixmap(x, y, self._scaled_cache)
             
+                # 부하 테스트: 의도적 지연
+                if self._stress_test:
+                    time.sleep(0.030)  # 30ms 지연
+            
             # 프레임 정보 표시
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
-            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 카메라화면 | Drop: {self._drop_count}"
+            info_text = f"Frame: {self._frame} | Num: {self.display_number} | 카메라화면 | Drop: {self.monitor.drop_count}"
             painter.drawText(10, 25, info_text)
             
             painter.end()
         
-        # paintGL 완료
-        self._is_painting = False
+        self.monitor.end_frame()  # 모니터링 종료
 
     def update_camera_frame(self, q_image):
         """카메라 프레임 업데이트 (메인 스레드에서 안전)"""
@@ -218,8 +276,28 @@ class MainWindow(QMainWindow):
         controls_layout = QVBoxLayout(controls)
         controls.setMaximumHeight(100)
         
-        # 종료 버튼
+        # 버튼 레이아웃
         button_layout = QHBoxLayout()
+        
+        # 부하 테스트 버튼
+        self.stress_btn = QPushButton("부하 테스트 OFF")
+        self.stress_btn.clicked.connect(self.toggle_stress_test)
+        self.stress_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-weight: bold;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        button_layout.addWidget(self.stress_btn)
+        
+        # 종료 버튼
         quit_btn = QPushButton("종료 (Q)")
         quit_btn.clicked.connect(self.close)
         quit_btn.setStyleSheet("""
@@ -330,6 +408,13 @@ class MainWindow(QMainWindow):
         """VSync 딜레이 슬라이더 변경"""
         self.vsync_delay_ms = value
         self.delay_label.setText(f"{value}ms")
+    
+    def toggle_stress_test(self):
+        """부하 테스트 토글"""
+        self.opengl_window._stress_test = not self.opengl_window._stress_test
+        status = "ON" if self.opengl_window._stress_test else "OFF"
+        self.stress_btn.setText(f"부하 테스트 {status}")
+        print(f"{'🔥 부하 테스트 활성화 (30ms 지연)' if self.opengl_window._stress_test else '✅ 부하 테스트 비활성화'}")
     
     def on_vsync_frame(self, cycle_position):
         """VSync 프레임 신호 처리 - 고정밀 타이밍"""
