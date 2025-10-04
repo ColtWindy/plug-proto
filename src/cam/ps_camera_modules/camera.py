@@ -1,32 +1,17 @@
 #coding=utf-8
-"""
-OpenGL Camera Controller
-QOpenGLWindow에 최적화된 카메라 제어
-"""
-import sys
-import os
+"""카메라 제어"""
 import cv2
 import numpy as np
 from PySide6.QtGui import QImage
+from _lib import mvsdk
 
-# 프로젝트 루트의 cam 디렉토리에서 mvsdk import
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from cam import mvsdk
-
-
-class OpenGLCameraController:
-    """QOpenGLWindow용 카메라 컨트롤러"""
-    
+class CameraController:
     def __init__(self, target_ip):
         self.hCamera = None
         self.pFrameBuffer = 0
         self.camera_info = {}
         self.target_ip = target_ip
-        self.frame_callback = None
-        self.frame_number = 0  # 프레임 번호 (카메라 이미지에 표시)
+        self.frame_callback = None  # 프레임 콜백 함수
     
     def setup_camera(self):
         """카메라 초기화"""
@@ -47,29 +32,20 @@ class OpenGLCameraController:
             self.hCamera = mvsdk.CameraInit(target_camera, -1, -1)
             cap = mvsdk.CameraGetCapability(self.hCamera)
             
-            # BGR8 포맷으로 출력
             mvsdk.CameraSetIspOutFormat(self.hCamera, mvsdk.CAMERA_MEDIA_TYPE_BGR8)
-            
-            # 수동 트리거 모드 (필요시 활성화)
-            mvsdk.CameraSetTriggerMode(self.hCamera, 0)  # 0: 연속 모드, 1: 트리거 모드
-            
-            # 수동 노출 모드 (슬라이더로 제어하기 위해)
-            mvsdk.CameraSetAeState(self.hCamera, 0)  # 0: 수동, 1: 자동
-            
-            # 아날로그 게인 초기화
+            mvsdk.CameraSetTriggerMode(self.hCamera, 1)  # 수동 트리거 모드
+            mvsdk.CameraSetAeState(self.hCamera, 1)  # 자동 노출 활성화
             mvsdk.CameraSetAnalogGain(self.hCamera, 0)
             
-            # 고속 모드
-            mvsdk.CameraSetFrameSpeed(self.hCamera, 2)
+            # 노출시간은 ps_camera.py에서 설정 (중복 제거)
             
-            # 프레임 버퍼 할당
+            # 프레임 속도 설정 (0: 저속, 1: 일반, 2: 고속)
+            mvsdk.CameraSetFrameSpeed(self.hCamera, 2)  # 고속 모드
+            
             buffer_size = cap.sResolutionRange.iWidthMax * cap.sResolutionRange.iHeightMax * 3
             self.pFrameBuffer = mvsdk.CameraAlignMalloc(buffer_size, 16)
-            
             # 콜백 함수 설정
             mvsdk.CameraSetCallbackFunction(self.hCamera, self.grab_callback, 0)
-            
-            # 카메라 시작
             mvsdk.CameraPlay(self.hCamera)
             
             self.camera_info = {
@@ -81,7 +57,7 @@ class OpenGLCameraController:
                 'gain': self.get_gain()
             }
             
-            print(f"✅ 카메라 연결 성공: {self.camera_info['name']}")
+            print("카메라 연결 성공!")
             return True, "성공"
             
         except Exception as e:
@@ -97,7 +73,6 @@ class OpenGLCameraController:
         try:
             FrameHead = pFrameHead[0]
             
-            # 이미지 처리
             mvsdk.CameraImageProcess(hCamera, pRawData, self.pFrameBuffer, FrameHead)
             mvsdk.CameraReleaseImageBuffer(hCamera, pRawData)
             
@@ -109,28 +84,13 @@ class OpenGLCameraController:
             frame_data = (mvsdk.c_ubyte * FrameHead.uBytes).from_address(self.pFrameBuffer)
             frame = np.frombuffer(frame_data, dtype=np.uint8)
             frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth, 3))
+            frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
             
-            # 프레임에 숫자 추가 (ps_camera.py 방식)
-            self.frame_number += 1
-            height, width = frame.shape[:2]
-            if width >= 100 and height >= 50:
-                text = str(self.frame_number)
-                # 이미지 크기에 비례한 폰트 크기
-                font_scale = width / 200.0
-                thickness = max(6, int(width / 80))  # 더 두껍게 (160 → 80)
-                
-                # 텍스트 크기 계산하여 정확한 중앙 배치
-                (text_width, text_height), baseline = cv2.getTextSize(
-                    text, cv2.FONT_HERSHEY_SIMPLEX, font_scale * 4, thickness
-                )
-                x = (width - text_width) // 2
-                y = (height + text_height) // 2
-                
-                cv2.putText(frame, text, (x, y), 
-                           cv2.FONT_HERSHEY_SIMPLEX, font_scale * 4, (255, 255, 255), thickness)
-            
-            # QImage로 변환
+            # 안전한 QImage 변환
+            height, width, channel = frame.shape
             bytes_per_line = 3 * width
+            
+            # 데이터 연속성 보장
             frame_contiguous = np.ascontiguousarray(frame)
             q_image = QImage(frame_contiguous.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
             
@@ -139,34 +99,33 @@ class OpenGLCameraController:
                 self.frame_callback(q_image)
                 
         except Exception as e:
-            print(f"❌ 카메라 콜백 오류: {e}")
+            print(f"카메라 콜백 오류: {e}")
+    
     
     def set_gain(self, value):
         """게인 설정"""
-        if self.hCamera:
-            mvsdk.CameraSetAnalogGain(self.hCamera, int(value))
-            self.camera_info['gain'] = value
+        mvsdk.CameraSetAnalogGain(self.hCamera, int(value))
+        self.camera_info['gain'] = value
     
-    def set_exposure_time(self, exposure_us):
-        """노출시간 직접 설정 (수동 모드)"""
-        if self.hCamera:
-            try:
-                mvsdk.CameraSetExposureTime(self.hCamera, exposure_us)
-                print(f"📸 노출시간: {exposure_us}μs")
-            except Exception as e:
-                print(f"❌ 노출시간 설정 실패: {e}")
+    def set_exposure_range(self, max_exposure_us):
+        """노출시간 범위 설정 (자동 노출 모드에서 최대값 제한)"""
+        try:
+            mvsdk.CameraSetAeExposureRange(self.hCamera, 1, max_exposure_us)
+            print(f"📸 노출시간 최대값 설정: {max_exposure_us}μs")
+        except Exception as e:
+            print(f"노출시간 설정 실패: {e}")
     
     def get_exposure_ms(self):
         """현재 노출시간 (ms 단위)"""
-        if self.hCamera:
-            return mvsdk.CameraGetExposureTime(self.hCamera) / 1000.0
-        return 0
+        return mvsdk.CameraGetExposureTime(self.hCamera) / 1000.0
     
     def get_gain(self):
         """현재 게인"""
-        if self.hCamera:
-            return mvsdk.CameraGetAnalogGain(self.hCamera)
-        return 0
+        return mvsdk.CameraGetAnalogGain(self.hCamera)
+    
+    
+    
+    
     
     def cleanup(self):
         """종료 시 정리"""

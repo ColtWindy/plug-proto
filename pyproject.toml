@@ -19,8 +19,9 @@ dev = [
     "types-setuptools>=80.9.0.20250822",
 ]
 
-[tool.setuptools]
-py-modules = []
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["*"]
 
 [build-system]
 requires = ["setuptools", "pybind11"]

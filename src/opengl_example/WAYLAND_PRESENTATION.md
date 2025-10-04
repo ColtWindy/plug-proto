@@ -106,8 +106,8 @@ Frame: 245 | 카메라화면 | GPU: 0 | Seq: 245 | P:245 D:0 | V:245 Z:0
 
 ### 1. C++ 모듈 빌드
 ```bash
-chmod +x build_wayland.sh
-./build_wayland.sh
+chmod +x build_cpp.sh
+./build_cpp.sh
 ```
 
 또는 직접:

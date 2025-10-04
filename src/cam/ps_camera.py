@@ -2,7 +2,6 @@
 import sys
 import os
 import time
-import mvsdk
 import numpy as np
 import cv2
 from PySide6.QtWidgets import QApplication
@@ -12,6 +11,7 @@ from ps_camera_modules.camera import CameraController
 from ps_camera_modules.ui import PSCameraUI
 from ps_camera_modules.timer import VSyncFrameTimer
 from util import measure_time
+from _lib import mvsdk
 
 # Jetson 디스플레이 환경 설정
 # OpenGL 대신 QPainter 사용으로 변경

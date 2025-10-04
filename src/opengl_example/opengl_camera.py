@@ -8,26 +8,14 @@ import sys
 import os
 import time
 import threading
-import ctypes
-
-# 프로젝트 루트를 sys.path에 추가
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
+import _native
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage, QGuiApplication, QWindow
 from PySide6.QtCore import Qt, QTimer, QElapsedTimer, QDateTime
 from OpenGL import GL
 from camera_controller import OpenGLCameraController
-from cam import mvsdk
-
-# wayland_presentation C++ 모듈 로드
-lib_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib')
-if lib_path not in sys.path:
-    sys.path.insert(0, lib_path)
-import wayland_presentation as wl_pres
+from _lib import mvsdk
 
 
 class PresentationMonitor:
@@ -38,7 +26,7 @@ class PresentationMonitor:
         self.frame_count = 0
         
         # C++ 모니터 생성
-        self.monitor = wl_pres.WaylandPresentationMonitor()
+        self.monitor = _native.wayland_presentation.WaylandPresentationMonitor()
         
         # 콜백 등록
         self.monitor.set_callback(self._on_feedback)
