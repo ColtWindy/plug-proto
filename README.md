@@ -70,3 +70,22 @@ uv run python main.py
 - PySide6 6.8+
 - OpenCV 4.12+
 - pybind11 3.0+
+
+## Wayland vs X11 성능 차이
+프레임 스킵 없이 ms-단위로 일정한 프레임 타이밍이 필요한 경우, **Wayland가 X11보다 안정적**입니다.
+
+### 왜 Wayland가 더 매끄러운가?
+- **컴포지터 주도 vblank 스케줄링**: Weston/Mutter 등이 디스플레이 vblank 타이밍에 맞춰 리페인트 루프를 관리
+- **presentation-time 프로토콜**: 실제 화면 표시 시각과 MSC(모니터 스캔 카운터) 타임스탬프를 제공
+- **단일 컴포지팅 경로**: X11의 이중 컴포지팅(X Server + Compositor) 문제가 없음
+
+### X11에서 동일 성능을 내려면?
+X11도 올바른 설정으로 Wayland 수준의 성능을 낼 수 있습니다:
+1. **GLX_OML_sync_control 확장 사용**: `glXWaitForMscOML()`로 vblank에 직접 동기화
+2. **환경변수 설정**: `__GL_SYNC_TO_VBLANK=1`, `__GL_MaxFramesAllowed=1` (triple buffering 방지)
+3. **전체화면 모드**: Desktop compositor 우회 (언리다이렉트)
+4. **순수 Xorg 세션**: XWayland 경로 사용 금지 (GLX 확장 보장)
+
+### 권장사항
+- **카메라 동기화 앱**: Wayland 사용 권장 (`nvstart-weston.sh` + `QT_QPA_PLATFORM=wayland-egl`)
+- **X11 필수 시**: `opengl_camera_x11.py` 참고 (추가 최적화 필요)
