@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+#coding=utf-8
 """
 PySide6 프레임 카운터 애플리케이션
 하드웨어 타이머를 사용하여 성능 측정
+Wayland 환경 지원
 """
 
 import sys
@@ -9,8 +11,43 @@ import os
 import cv2
 import numpy as np
 
-# 젯슨 로컬 디스플레이 환경 설정 (SSH 접속 시)
-os.environ['DISPLAY'] = ':0'
+# Wayland 환경 설정 (ps_camera.py 방식)
+def setup_wayland_environment():
+    """Wayland 환경 설정 (SSH 접속 시 필수)"""
+    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
+    if not xdg_runtime_dir:
+        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
+        xdg_runtime_dir = f"/run/user/{user_id}"
+        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
+    
+    wayland_display = os.getenv('WAYLAND_DISPLAY')
+    if not wayland_display:
+        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
+        
+        for display_name in possible_displays:
+            socket_path = os.path.join(xdg_runtime_dir, display_name)
+            if os.path.exists(socket_path):
+                os.environ['WAYLAND_DISPLAY'] = display_name
+                wayland_display = display_name
+                break
+    
+    return wayland_display, xdg_runtime_dir
+
+# Wayland 환경 설정
+wayland_display, xdg_runtime_dir = setup_wayland_environment()
+
+if not wayland_display:
+    print("❌ 사용 가능한 Wayland 디스플레이를 찾을 수 없습니다")
+    sys.exit(1)
+else:
+    print(f"✅ Wayland 디스플레이: {wayland_display}")
+
+socket_path = os.path.join(xdg_runtime_dir, wayland_display)
+if not os.path.exists(socket_path):
+    print(f"❌ Wayland 소켓이 존재하지 않습니다: {socket_path}")
+    sys.exit(1)
+else:
+    print(f"✅ Wayland 소켓: {socket_path}")
 
 # Qt 로깅 경고 억제
 os.environ['QT_LOGGING_RULES'] = 'qt.qpa.plugin=false'
@@ -19,22 +56,15 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QLabel
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent
 
-# C++ 모듈 import
-try:
-    sys.path.append(os.path.join(os.path.dirname(__file__), 'lib'))
-    import timer_module
-    TIMER_AVAILABLE = True
-    print("하드웨어 타이머 모듈 로드 완료")
-except ImportError:
-    TIMER_AVAILABLE = False
-    print("하드웨어 타이머 모듈을 찾을 수 없습니다. Python 타이머를 사용합니다.")
-    import time
+# C++ 하드웨어 타이머 모듈 import (필수)
+from _native.timer_module import get_hardware_timer, get_timer_diff_ms
+print("✅ 하드웨어 타이머 모듈 로드 완료")
 
 
 class FrameCounterWidget(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Frame Counter")
+        self.setWindowTitle("Frame Counter - Hardware Timer")
         
         # 창 크기 설정
         self.setGeometry(100, 100, 800, 600)
@@ -44,17 +74,11 @@ class FrameCounterWidget(QMainWindow):
         self.label = QLabel()
         self.setCentralWidget(self.label)
         
-        # 카메라 사용하지 않음 - 더미 프레임만 사용
-        self.cap = None
-        
         # 카운터 초기화
         self.frame_count = 0
         
-        # 타이머 초기화
-        if TIMER_AVAILABLE:
-            self.start_time = timer_module.get_hardware_timer()
-        else:
-            self.start_time = time.time() * 1000000
+        # 하드웨어 타이머 초기화
+        self.start_time = get_hardware_timer()
         
         # Qt 타이머 설정
         self.timer = QTimer()
@@ -62,19 +86,15 @@ class FrameCounterWidget(QMainWindow):
         self.timer.start(30)  # 30ms마다 업데이트
     
     def update_frame(self):
+        """프레임 업데이트 및 타이머 표시"""
         # 더미 프레임 생성
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         
         self.frame_count += 1
         
-        # 타이머 계산
-        if TIMER_AVAILABLE:
-            current_time = timer_module.get_hardware_timer()
-            elapsed_ms = timer_module.get_timer_diff_ms(self.start_time, current_time)
-        else:
-            current_time = time.time() * 1000000
-            elapsed_ms = (current_time - self.start_time) / 1000.0
-        
+        # 하드웨어 타이머 계산
+        current_time = get_hardware_timer()
+        elapsed_ms = get_timer_diff_ms(self.start_time, current_time)
         fps = self.frame_count / (elapsed_ms / 1000.0) if elapsed_ms > 0 else 0
         
         # 텍스트 추가
@@ -82,7 +102,7 @@ class FrameCounterWidget(QMainWindow):
             f"Frame: {self.frame_count}",
             f"Time: {elapsed_ms:.1f}ms",
             f"FPS: {fps:.1f}",
-            f"Timer: {'HW' if TIMER_AVAILABLE else 'SW'}"
+            f"Timer: Hardware"
         ]
         
         y_offset = 30
@@ -110,15 +130,18 @@ class FrameCounterWidget(QMainWindow):
         self.label.setPixmap(QPixmap.fromImage(qt_image))
     
     def keyPressEvent(self, event):
+        """ESC 키로 종료"""
         if event.key() == Qt.Key_Escape:
             self.close()
         super().keyPressEvent(event)
     
     def closeEvent(self, event):
+        """종료 처리"""
         event.accept()
 
 
 def main():
+    """애플리케이션 진입점"""
     app = QApplication(sys.argv)
     
     # 애플리케이션 속성 설정
@@ -132,14 +155,11 @@ def main():
     window.activateWindow()
     window.show()
     
-    
-    print(f"GUI 창이 표시되었습니다. 창 크기: {window.width()}x{window.height()}")
+    print(f"🎬 GUI 창이 표시되었습니다. 창 크기: {window.width()}x{window.height()}")
     
     sys.exit(app.exec())
 
 
 if __name__ == "__main__":
     main()
-
-
 

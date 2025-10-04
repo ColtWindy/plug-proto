@@ -19,9 +19,10 @@ dev = [
     "types-setuptools>=80.9.0.20250822",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["*"]
+# 다음은 export 할 때에만 필요함
+# [tool.setuptools.packages.find]
+# where = ["src"]
+# include = ["*"]
 
 [build-system]
 requires = ["setuptools", "pybind11"]

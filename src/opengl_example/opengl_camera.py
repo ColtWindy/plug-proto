@@ -8,7 +8,7 @@ import sys
 import os
 import time
 import threading
-import _native
+
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage, QGuiApplication, QWindow
@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QTimer, QElapsedTimer, QDateTime
 from OpenGL import GL
 from camera_controller import OpenGLCameraController
 from _lib import mvsdk
-
+from _native.wayland_presentation import WaylandPresentationMonitor
 
 class PresentationMonitor:
     """C++ wp_presentation 헬퍼 기반 프레임 표시 추적"""
@@ -26,7 +26,7 @@ class PresentationMonitor:
         self.frame_count = 0
         
         # C++ 모니터 생성
-        self.monitor = _native.wayland_presentation.WaylandPresentationMonitor()
+        self.monitor = WaylandPresentationMonitor()
         
         # 콜백 등록
         self.monitor.set_callback(self._on_feedback)

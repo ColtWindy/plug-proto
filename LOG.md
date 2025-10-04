@@ -112,12 +112,14 @@ dependencies = [
 
 반면 `editable install`을 사용하면, `uv run` 없이 `python` 명령만으로 실행할 수 있다.
 
-### `__init__.py` vs `__main__.py`
+### uv를 사용하는 경우, python 만 실행하는 경우
+uv를 사용하고 `pyproject.toml`을 사용하는 경우, `python app.py`와 같이 실행하는 대신 `uv run app.py`와 같이 실행한다. `uv`는 `PYTHONPATH`를 설정하거나 하는등의 일을 한다. 
 
-- `__init__.py`는 패키지를 초기화하는 파일. 패키지를 import할 때 실행되는 파일
-  - 공개 api 재노출
-- `__main__.py`는 패키지를 실행하는 파일
-  - `python -m <package_name>` 은 `__main__.py` 파일을 실행 하는 것이다. 일반 파이썬파일 (`.py`)와 구분하기 위해 `-m` 옵션을 사용한다.
+### `uv run src/my_app.py` 실행시 작동하는 매커니즘
+- `파일 경로로 실행할 때, 그 파일이 있는 디렉터리를 sys.path[0]에 자동으로 넣음`
+- 파이썬 3.3+에서는 __init__.py가 없어도 네임스페이스 패키지(PEP 420)를 지원하므로, `import foo.bar`와 같이 읽을 수 있다.
+- 단, `init`반드시 필요한 경우는, 외부로 export 할 때나, `uv run -m` 옵션을 사용해서 실행할 때 등은 필요하다.
+- 최소한의 안정성으로는 루트의 `__init__.py`를 만들어 두면 좋다.
 
 ### `pyproject.toml`
 
@@ -126,14 +128,19 @@ dependencies = [
 where = ["src"]
 include = ["*"]
 ```
-자, 위에서 `where`는 패키지를 찾을 디렉토리를 말하고, `include`는 찾을 패키지들을 말한다. `exclude`는 제외할 패키지들을 말한다.
+이 설정은 배포하지 않는 경우는 필요가 없다.
 
-여기서는 모든 python파일이 `src` 디렉토리에 있고, 그 하위를 모두 패키지에서 참조 할 것이기 때문에, `*`를 사용한다.
+### `__init__.py` vs `__main__.py`
 
+- `__init__.py`는 패키지를 초기화하는 파일. 패키지를 import할 때 실행되는 파일
+  - 공개 api 재노출
+- `__main__.py`는 패키지를 실행하는 파일
+  - `python -m <package_name>` 은 `__main__.py` 파일을 실행 하는 것이다. 일반 파이썬파일 (`.py`)와 구분하기 위해 `-m` 옵션을 사용한다.
 
 ### 결론
 
-- 모듈 이름으로 import를 하려는 경우는 무조건적으로 `__init__.py` 파일을 만드는 것이 좋다. 이 때 루트오 `__init__.py`가 필요하다.
+- 가능한 `__init__.py`를 만드는 대신 `uv`를 사용한다.
+- `__init__.py`는 모듈 초기화나 `__all__` 정의를 위해 사용한다.
 
 ### Python 프로젝트 패키지 구조
 
