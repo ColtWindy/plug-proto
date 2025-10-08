@@ -16,7 +16,7 @@ from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap
 from PySide6.QtCore import Qt, QDateTime
 from OpenGL import GL
-from camera_controller import OpenGLCameraController
+from opengl_example.camera_controller import OpenGLCameraController
 from _lib import mvsdk
 from _lib.wayland_utils import setup_wayland_environment
 from _native.wayland_presentation import WaylandPresentationMonitor
@@ -570,3 +570,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
