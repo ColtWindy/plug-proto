@@ -24,3 +24,7 @@ Thumbs.db
 
 # Camera
 Camera/
+
+# YOLO models (compiled)
+*.engine
+*.onnx
