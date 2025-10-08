@@ -2,9 +2,6 @@
 import sys
 import os
 
-# 상위 디렉토리 경로 추가 (src/_lib, src/config 접근용)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from pathlib import Path
 import numpy as np
 import cv2
