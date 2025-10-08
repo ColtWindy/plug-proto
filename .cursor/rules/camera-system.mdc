@@ -1,17 +1,33 @@
 ---
-description: "Camera system architecture and patterns"
+description: "Camera system architecture"
 ---
 
-# Camera System Guide
+# Camera System
 
-## Architecture Overview
-카메라 시스템은 모듈화된 구조로 설계되어 있습니다:
+## Architecture
+```
+src/cam/
+├── ps_camera.py              # 메인 애플리케이션
+└── ps_camera_modules/
+    ├── camera.py             # 카메라 하드웨어 제어
+    ├── ui.py                 # PySide6 UI
+    └── timer.py              # VSync 타이밍
+```
 
-- [cam/ps_camera.py](mdc:cam/ps_camera.py): 메인 애플리케이션 및 VSync 제어
-- [cam/ps_camera_modules/camera.py](mdc:cam/ps_camera_modules/camera.py): 카메라 하드웨어 제어
-- [cam/ps_camera_modules/ui.py](mdc:cam/ps_camera_modules/ui.py): PySide6 UI 컴포넌트
-- [cam/ps_camera_modules/timer.py](mdc:cam/ps_camera_modules/timer.py): VSync 타이밍 제어
+## Configuration
+`config.py`에서 중앙 관리:
+```python
+CAMERA_IP = "192.168.0.100"
+SUBNET_MASK = "255.255.255.0"
+GATEWAY = "192.168.0.1"
+```
 
-## Environment Setup
-- Wayland 디스플레이 환경 자동 감지 및 설정
-- opencv-python (표준 버전) 사용, headless 버전 사용 안 함
+## Key Features
+- **VSync 동기화**: 디스플레이 수직 동기화에 맞춘 카메라 트리거
+- **프레임 드랍 감지**: GPU fence로 실시간 감지
+- **타이밍 조정**: 노출시간, VSync 딜레이 슬라이더
+
+## Camera SDK
+- **Mindvision mvsdk**: `src/_lib/mvsdk.py`
+- **GigE 카메라**: IP 기반 연결
+- **트리거 모드**: 소프트 트리거로 정확한 타이밍 제어

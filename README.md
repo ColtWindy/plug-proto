@@ -1,91 +1,179 @@
 # plug-proto
 
-Jetson Orin Nano용 PySide6 + C++ 하드웨어 타이머 프로젝트
+Jetson Nano Super용 PySide6 카메라 동기화 프로젝트
 
 ## 개요
-이 프로젝트는 Python과 C++을 결합하여 다음 기능을 제공합니다:
-- PySide6 GUI를 사용한 실시간 프레임 카운터 표시
-- C++ 하드웨어 타이머를 통한 정밀한 시간 측정
-- pybind11을 통한 Python-C++ 연동
+
+Mindvision GigE 카메라와 디스플레이 VSync를 정밀하게 동기화하여 프레임 드랍 없는 영상 표시를 구현합니다.
 
 ## 프로젝트 구조
+
 ```
 plug-proto/
+├── src/
+│   ├── cam/
+│   │   ├── ps_camera.py              # 메인 카메라 애플리케이션
+│   │   └── ps_camera_modules/        # 카메라 모듈들
+│   ├── opengl_example/
+│   │   ├── opengl_camera.py          # OpenGL 카메라 (Wayland)
+│   │   ├── opengl_camera_x11.py      # OpenGL 카메라 (X11)
+│   │   └── camera_controller.py      # 카메라 제어
+│   ├── set_camera_ip.py              # 카메라 IP 설정 도구
+│   ├── config.py                     # 카메라 설정 (IP, 서브넷, 게이트웨이)
+│   ├── _lib/
+│   │   ├── mvsdk.py                  # Mindvision SDK
+│   │   └── wayland_utils.py          # Wayland 환경 설정
+│   └── _native/                      # C++ 컴파일된 모듈
 ├── cpp/
-│   ├── timer.cpp          # 하드웨어 타이머 + pybind11 바인딩
-│   └── setup.py           # 빌드 설정
-├── lib/                   # 컴파일된 .so 파일 위치
-├── main.py                # 메인 Python 애플리케이션
-└── pyproject.toml         # 프로젝트 설정
+│   ├── timer.cpp                     # 하드웨어 타이머
+│   ├── wayland_presentation.cpp      # Wayland presentation 모니터
+│   └── setup.py                      # C++ 빌드 설정
+├── config.py                         # 프로젝트 설정
+└── pyproject.toml                    # 패키지 설정
 ```
 
-## 설치 및 실행
-### 0. 환경 설정
-QT에서 PySide6 사용시 다음 `libxcb-cursor0`가 필요함
+## 환경 설정
 
+### 필수 시스템 패키지
+QT에서 PySide6 사용시 다음 `libxcb-cursor0` 패키지 설치 필요
 ```bash
 sudo apt update && sudo apt install -y libxcb-cursor0
 ```
-- ssh접속시 DISPLAY 환경변수 설정 필요시: `export DISPLAY=:0`
 
-Wayland 활성화. 자세한 내용은 다음 링크를 참고한다.
-https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/WindowingSystems/WestonWayland.html#sd-windowingsystems-westonwayland
+### Python 환경
+- Python 3.12+ 필요
+- uv 패키지 매니저 사용
 
-단순 wayland실행시는 `nvstart-weston.sh`를 실행한다.
-
-- Python버전은 3.12가 필요함
-
-### 1. 의존성 설치
+### Wayland 활성화 (권장)
 ```bash
-# uv 사용 (권장)
+nvstart-weston.sh
+```
+자세한 내용: [Jetson Weston/Wayland](https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/WindowingSystems/WestonWayland.html)
+
+### SSH 접속 시
+```bash
+export DISPLAY=:0  # X11 사용 시
+# Wayland는 자동 설정됨
+```
+
+## 설치
+
+```bash
+# 1. 의존성 설치
 uv sync
 
-# 또는 pip 사용
-pip install PySide6 opencv-python pybind11 setuptools numpy
+# 2. C++ 모듈 빌드
+./build_cpp.sh
 ```
 
-### 2. C++ 모듈 빌드
-```bash
-uv run python ./cpp/setup.py build_ext --build-lib lib
+## 카메라 설정
+
+### 1. 카메라 IP 주소 설정
+`config.py` 파일 수정:
+```python
+CAMERA_IP = "192.168.0.100"
+SUBNET_MASK = "255.255.255.0"
+GATEWAY = "192.168.0.1"
 ```
 
-### 3. 애플리케이션 실행
+### 2. 카메라 IP 설정 적용
 ```bash
-uv run python main.py
+uv run src/set_camera_ip.py
+```
+
+## 실행
+
+### 1. 메인 카메라 애플리케이션 (QPainter, Wayland) ⭐ 권장
+```bash
+uv run src/cam/ps_camera.py
+```
+**특징**:
+- VSync 동기화로 프레임 드랍 없음
+- 프레임 번호 표시
+- 게인/노출시간 실시간 조정
+- 검은 화면 ↔ 카메라 화면 교대 표시
+
+### 2. OpenGL 카메라 (Wayland)
+```bash
+uv run src/opengl_example/opengl_camera.py
+```
+**특징**:
+- OpenGL ES 3.2 + EGL + Wayland
+- GPU fence 기반 프레임 드랍 감지
+- Wayland presentation protocol 모니터링
+- 부하 테스트 모드
+
+### 3. OpenGL 카메라 (X11)
+```bash
+uv run src/opengl_example/opengl_camera_x11.py
+```
+**특징**:
+- OpenGL 4.6 + X11
+- GLX 기반 렌더링
+- X11 환경에서 사용 시
+
+### 4. OpenGL 예제 (학습용)
+```bash
+# 기본 프레임 카운터
+uv run src/opengl_example/frame_counter.py
+
+# VSync 동기화 프레임 카운터
+uv run src/opengl_example/vsync_frame_counter.py
 ```
 
 ## 기능
-- **PySide6 GUI**: 안정적인 Qt 기반 GUI 창
-- **프레임 카운터**: 실시간으로 프레임 번호가 화면에 표시됩니다
-- **성능 모니터링**: FPS, 경과 시간, 타이머 타입 정보 표시
-- **하드웨어 타이머**: C++로 구현된 고정밀 타이머 사용
-- **카메라 지원**: 웹캠이 없을 경우 더미 프레임으로 동작
 
-## 조작법
-- 창 닫기 버튼으로 애플리케이션 종료
+### 프레임 동기화
+- **VSync 기반**: 디스플레이 수직 동기화에 맞춘 카메라 트리거
+- **프레임 드랍 감지**: GPU fence와 Wayland presentation으로 실시간 감지
+- **타이밍 조정**: 노출시간, VSync 딜레이 슬라이더로 미세 조정
+
+### 카메라 제어
+- 게인 조정 (0-100)
+- 노출시간 조정 (1-30ms)
+- 소프트 트리거 모드
+
+### 모니터링
+- 프레임 번호, FPS
+- GPU 블록 카운트
+- Presented/Discarded 프레임 통계
+- VSync 동기화 상태
 
 ## 개발 환경
-- Ubuntu (Jetson Orin Nano)
-- Python 3.11+
-- PySide6 6.8+
-- OpenCV 4.12+
-- pybind11 3.0+
 
-## Wayland vs X11 성능 차이
-프레임 스킵 없이 ms-단위로 일정한 프레임 타이밍이 필요한 경우, **Wayland가 X11보다 안정적**입니다.
+- **플랫폼**: Jetson Nano Super (Ubuntu 22.04, ARM64)
+- **디스플레이**: Wayland (권장) 또는 X11
+- **카메라**: Mindvision GigE Camera (MV-GE134GC-IT)
+- **패키지 관리**: uv
 
-### 왜 Wayland가 더 매끄러운가?
-- **컴포지터 주도 vblank 스케줄링**: Weston/Mutter 등이 디스플레이 vblank 타이밍에 맞춰 리페인트 루프를 관리
-- **presentation-time 프로토콜**: 실제 화면 표시 시각과 MSC(모니터 스캔 카운터) 타임스탬프를 제공
-- **단일 컴포지팅 경로**: X11의 이중 컴포지팅(X Server + Compositor) 문제가 없음
+## 성능 최적화
 
-### X11에서 동일 성능을 내려면?
-X11도 올바른 설정으로 Wayland 수준의 성능을 낼 수 있습니다:
-1. **GLX_OML_sync_control 확장 사용**: `glXWaitForMscOML()`로 vblank에 직접 동기화
-2. **환경변수 설정**: `__GL_SYNC_TO_VBLANK=1`, `__GL_MaxFramesAllowed=1` (triple buffering 방지)
-3. **전체화면 모드**: Desktop compositor 우회 (언리다이렉트)
-4. **순수 Xorg 세션**: XWayland 경로 사용 금지 (GLX 확장 보장)
+### Wayland (권장)
+- 컴포지터 주도 VSync 스케줄링
+- Presentation-time 프로토콜로 정확한 타이밍
+- 프레임 드랍 최소화
 
-### 권장사항
-- **카메라 동기화 앱**: Wayland 사용 권장 (`nvstart-weston.sh` + `QT_QPA_PLATFORM=wayland-egl`)
-- **X11 필수 시**: `opengl_camera_x11.py` 참고 (추가 최적화 필요)
+### X11 (대안)
+- GLX_OML_sync_control 확장 필요
+- `__GL_SYNC_TO_VBLANK=1` 환경변수 설정
+- 전체화면 모드 권장
+
+자세한 내용은 `LOG.md` 참조.
+
+## 문제 해결
+
+### 카메라를 찾을 수 없음
+1. 네트워크 연결 확인 (GigE 포트)
+2. 카메라 IP 설정 확인 (`config.py`)
+3. `uv run src/set_camera_ip.py` 실행
+
+### Wayland 디스플레이를 찾을 수 없음
+```bash
+nvstart-weston.sh
+```
+
+### libxcb-cursor 오류
+```bash
+sudo apt install -y libxcb-cursor0
+```
+

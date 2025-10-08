@@ -1,37 +1,50 @@
 ---
-globs: *.py
+globs: "*.py"
 ---
 
 # Python Coding Standards
 
-## Encoding and Imports
-- 모든 Python 파일은 `#coding=utf-8`로 시작
-- Import 순서: 표준 라이브러리 → 서드파티 → 로컬 모듈
-- 예시:
+## File Header
+```python
+#coding=utf-8
+```
+
+## Import Order
+1. 표준 라이브러리
+2. 서드파티 라이브러리
+3. 로컬 모듈
+
 ```python
 #coding=utf-8
 import sys
 import os
 import time
-import mvsdk
 import numpy as np
 import cv2
 from PySide6.QtWidgets import QApplication
-from ps_camera_modules.camera import CameraController
+from _lib.wayland_utils import setup_wayland_environment
+from config import CAMERA_IP
 ```
 
 ## Documentation
-- 모든 함수와 클래스에 한국어 docstring 사용
-- 함수 목적과 주요 매개변수 설명 포함
+- 함수/클래스에 한국어 docstring
+- 목적과 주요 매개변수 설명
 
-## Error Handling
-- try-except 블록에서 구체적인 예외 메시지 출력
-- 예시: `print(f"카메라 콜백 오류: {e}")`
+```python
+def setup_camera():
+    """
+    카메라 초기화 및 설정
+    트리거 모드를 수동으로 설정하고 초기 노출 값 적용
+    """
+```
 
-## Performance Monitoring
-- 성능 측정이 필요한 함수에는 [util.py](mdc:util.py)의 `@measure_time` decorator 사용
-- 실행 시간은 밀리초 단위로 출력
+## Error Messages
+- 한국어로 명확한 오류 메시지
 
-## Korean Language Usage
-- 코멘트, 로그 메시지, docstring은 한국어 사용
-- 변수명과 함수명은 영어 사용
+```python
+print(f"❌ 카메라 초기화 실패: {message}")
+```
+
+## Language Convention
+- **코멘트/로그/docstring**: 한국어
+- **변수명/함수명**: 영어
