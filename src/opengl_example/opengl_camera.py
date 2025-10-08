@@ -9,6 +9,9 @@ import os
 import time
 import threading
 
+# 프로젝트 루트 경로 추가 (config import를 위해)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage, QGuiApplication, QWindow
@@ -17,6 +20,7 @@ from OpenGL import GL
 from camera_controller import OpenGLCameraController
 from _lib import mvsdk
 from _native.wayland_presentation import WaylandPresentationMonitor
+from config import CAMERA_IP
 
 class PresentationMonitor:
     """C++ wp_presentation 헬퍼 기반 프레임 표시 추적"""
@@ -316,9 +320,9 @@ class CameraOpenGLWindow(QOpenGLWindow):
 class MainWindow(QMainWindow):
     """OpenGL 카메라 메인 윈도우"""
     
-    def __init__(self, camera_ip="192.168.0.100"):
+    def __init__(self):
         super().__init__()
-        self.camera_ip = camera_ip
+        self.camera_ip = CAMERA_IP
         self.camera = None
         self.exposure_time_ms = 9
         self.vsync_delay_ms = 17  # VSync 딜레이 (셔터 타이밍 조정)
@@ -576,10 +580,8 @@ def main():
     
     app = QApplication(sys.argv)
     
-    # 카메라 IP 설정 (필요시 변경)
-    camera_ip = "192.168.0.100"
-    
-    window = MainWindow(camera_ip)
+    # 카메라 IP는 config.py에서 관리됨
+    window = MainWindow()
     window.show()
     
     # 초기 렌더링 트리거

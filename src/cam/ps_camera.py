@@ -13,6 +13,10 @@ from ps_camera_modules.timer import VSyncFrameTimer
 from util import measure_time
 from _lib import mvsdk
 
+# 프로젝트 루트 경로 추가 (config import를 위해)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from config import CAMERA_IP
+
 # Jetson 디스플레이 환경 설정
 # OpenGL 대신 QPainter 사용으로 변경
 
@@ -56,16 +60,13 @@ else:
     # socket_path: /run/user/1000/wayland-0
     print(f"Wayland 소켓이 존재합니다: {socket_path}")
 
-# 카메라 설정 정보
-TARGET_CAMERA_IP = "192.168.0.100"
-
 # VSync 타이밍 조정 상수 (실행 전 설정)
 EXPOSURE_TIME_MS = 10   # 노출시간 직접 설정 (5-30ms)
 VSYNC_DELAY_MS = -15    # 화면 그리기 딜레이 보정 (-50~+50ms)
 
 class App:
     def __init__(self):
-        self.camera = CameraController(TARGET_CAMERA_IP)
+        self.camera = CameraController(CAMERA_IP)
         self.ui = PSCameraUI()
         # 하드웨어 주사율 감지
         self.hardware_fps = self._detect_hardware_refresh_rate()
