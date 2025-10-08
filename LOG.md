@@ -65,7 +65,169 @@ fmt.setSwapInterval(1)                          # VSync
 - `EGL_WL_bind_wayland_display`
 - `EGL_WL_wayland_eglstream`
 
+## 패키지 관리 (uv)
+
+### `uv add` vs `uv pip install`
+
+**`uv add` - 패키지 매니저 방식** (npm install과 유사)
+```bash
+uv add numpy
+```
+- ✅ `pyproject.toml`에 의존성 기록
+- ✅ `uv.lock` 생성 (정확한 버전 고정)
+- ✅ 재현 가능 (팀 작업, 배포)
+- ❌ 다중 플랫폼 해결로 느릴 수 있음
+
+**`uv pip install` - pip 호환 방식**
+```bash
+uv pip install numpy
+```
+- ✅ 빠르고 직접적
+- ✅ 특수 인덱스 사용 간편
+- ❌ `pyproject.toml` 수정 안 됨
+- ❌ 의존성 기록 없음
+
+### 패키지 인덱스
+
+**일반 인덱스 (PyPI)**: 기본 저장소
+```bash
+uv add numpy  # https://pypi.org/ (자동)
+```
+
+**특수 인덱스**: 전용 저장소
+```bash
+# PyTorch GPU 버전 (PyPI에는 CPU만 있음)
+uv pip install torch --index-url https://download.pytorch.org/whl/cu118
+
+# Jetson ARM64 + CUDA
+uv pip install torch --extra-index-url https://developer.download.nvidia.com/compute/redist/jp/v60
+```
+
+**왜 특수 인덱스가 필요한가?**
+- PyTorch CUDA 버전: 용량 큼 (2-3GB), PyPI 100MB 제한
+- Jetson: ARM64 + CUDA 전용 빌드
+- 회사 내부 패키지
+
+### 실전 권장사항
+
+**일반 패키지**: `uv add`
+```bash
+uv add pyside6 opencv-python numpy
+```
+
+**특수 인덱스 (CUDA, ARM 등)**: `uv pip install`
+```bash
+# CUDA PyTorch (Jetson)
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
+**`uv add`로 특수 인덱스 사용** (영구 설정):
+```toml
+# pyproject.toml
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }
+```
+
+### Jetson 특수 환경: 시스템 패키지 사용
+
+**문제**: Jetson PyTorch (CUDA + ARM64)는 PyPI에 없음
+- PyPI에는 x86_64 CUDA 버전만 존재
+- ARM64 + CUDA 조합은 NVIDIA가 별도 제공
+- uv 가상환경에서는 PyPI CPU 버전만 설치 가능 → **CUDA 사용 불가** ❌
+
+**해결**: `--system-site-packages` + `pyproject.toml`에서 제외
+
+#### `--system-site-packages`의 역할
+```bash
+uv venv --python 3.10 --system-site-packages
+```
+- 가상환경에서 **시스템 패키지 접근 허용**
+- Python import 순서:
+  1. `.venv/lib/python3.10/site-packages/` (가상환경) ← 우선
+  2. `/usr/local/lib/python3.10/dist-packages/` (시스템)
+
+#### 시스템 패키지 사용 원리
+
+**핵심**: `pyproject.toml`에서 CUDA 관련 패키지 **제거** 필수
+
+```toml
+# pyproject.toml
+dependencies = [
+    "PySide6==6.8.0.2",
+    # torch, numpy, opencv-python 제거 ← 중요!
+    # ultralytics 제거 (torch 의존성)
+]
+```
+
+**작동 방식**:
+1. `pyproject.toml`에 **명시하지 않음** → 가상환경에 설치 안 됨
+2. 가상환경에 없으면 → `--system-site-packages` 덕분에 시스템에서 찾음
+3. 시스템 CUDA PyTorch 사용 ✅
+
+**잘못된 예시** (작동 안 함):
+```toml
+dependencies = [
+    "torch>=2.0.0",  # ❌ PyPI CPU 버전 설치됨
+    "ultralytics>=8.3.0",  # ❌ torch를 의존성으로 요구 → CPU 버전 설치
+]
+# 결과: 가상환경에 CPU torch → CUDA 사용 불가
+```
+
+**올바른 예시**:
+```toml
+dependencies = [
+    "PySide6==6.8.0.2",
+    # torch, ultralytics 제거 → 시스템 CUDA 버전 사용
+]
+```
+
+**확인**:
+```bash
+# 가상환경에서 시스템 CUDA torch 사용 확인
+uv run python -c "import torch; print(torch.__version__)"
+# → 2.5.0a0+872d972e41.nv24.08 (Jetson CUDA) ✅
+```
+
+**주의사항**:
+- PyPI에 동일 패키지가 있으면 가상환경이 우선
+- 의존성 충돌 가능 (예: numpy 1.x vs 2.x)
+- 시스템 패키지와 버전 호환성 확인 필요
+
 ## Python 패키지 구조와 실행 방식
+
+### Python vs Node.js 파일 경로 기준
+
+**Python**: 파일 경로는 **현재 작업 디렉토리(cwd)** 기준
+```python
+# 실행 위치에 따라 달라짐
+open("./file.txt")  # cwd 기준
+YOLO("./models/model.pt")  # cwd 기준
+
+# 스크립트 파일 기준으로 하려면
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+path = os.path.join(script_dir, "file.txt")
+```
+
+**Node.js**: `require()`/`import`는 **파일 위치** 기준
+```javascript
+require("./module")  // 현재 파일 기준 (모듈 시스템)
+fs.readFile("./file.txt")  // cwd 기준 (파일 시스템)
+```
+
+**실전 예시**:
+```bash
+# 프로젝트 루트에서 실행
+uv run src/yolo/convert_model.py
+
+# 코드: YOLO("./models/model.pt")
+# 찾는 경로: /project_root/models/model.pt ❌
+# 실제 경로: /project_root/src/yolo/models/model.pt ✅
+```
 
 ### `uv run`이 하는 일
 `uv run`은 단순히 Python 인터프리터를 실행하는 것 이상의 작업을 수행합니다:
