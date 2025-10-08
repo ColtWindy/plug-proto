@@ -10,9 +10,13 @@ import sys
 import os
 import tempfile
 import mmap
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from pywayland.client import Display
 from pywayland.protocol.wayland import WlCompositor, WlShm, WlSurface, WlRegistry, WlShell, WlOutput
 from pywayland.protocol.xdg_shell import XdgWmBase, XdgSurface, XdgToplevel
+from _lib.wayland_utils import setup_wayland_environment
 
 
 class WaylandVSync:
@@ -328,30 +332,6 @@ class WaylandVSync:
             print("✓ 리소스 정리 완료")
         except Exception as e:
             print(f"정리 중 오류: {e}")
-
-
-def setup_wayland_environment():
-    """Wayland 환경 자동 설정"""
-    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
-    if not xdg_runtime_dir:
-        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
-        xdg_runtime_dir = f"/run/user/{user_id}"
-        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
-        print(f"XDG_RUNTIME_DIR 자동 설정: {xdg_runtime_dir}")
-    
-    wayland_display = os.getenv('WAYLAND_DISPLAY')
-    if not wayland_display:
-        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
-        
-        for display_name in possible_displays:
-            socket_path = os.path.join(xdg_runtime_dir, display_name)
-            if os.path.exists(socket_path):
-                os.environ['WAYLAND_DISPLAY'] = display_name
-                wayland_display = display_name
-                print(f"WAYLAND_DISPLAY 자동 설정: {display_name}")
-                break
-    
-    return wayland_display, xdg_runtime_dir
 
 
 def main():

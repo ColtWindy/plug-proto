@@ -12,37 +12,13 @@ from ps_camera_modules.ui import PSCameraUI
 from ps_camera_modules.timer import VSyncFrameTimer
 from util import measure_time
 from _lib import mvsdk
-
-# 프로젝트 루트 경로 추가 (config import를 위해)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from config import CAMERA_IP
+from _lib.wayland_utils import setup_wayland_environment
 
 # Jetson 디스플레이 환경 설정
 # OpenGL 대신 QPainter 사용으로 변경
 
-# 젯슨 Wayland 디스플레이 환경 설정 (SSH 접속 시)
-def setup_wayland_environment():
-    """Wayland 환경 설정"""
-    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
-    if not xdg_runtime_dir:
-        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
-        xdg_runtime_dir = f"/run/user/{user_id}"
-        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
-    
-    wayland_display = os.getenv('WAYLAND_DISPLAY')
-    if not wayland_display:
-        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
-        
-        for display_name in possible_displays:
-            socket_path = os.path.join(xdg_runtime_dir, display_name)
-            if os.path.exists(socket_path):
-                os.environ['WAYLAND_DISPLAY'] = display_name
-                wayland_display = display_name
-                break
-    
-    return wayland_display, xdg_runtime_dir
-
-# Wayland 환경 설정 - wayland_test.py 방식
+# Wayland 환경 설정
 wayland_display, xdg_runtime_dir = setup_wayland_environment()
 
 if not wayland_display:

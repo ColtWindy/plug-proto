@@ -14,36 +14,8 @@ import mmap
 import os
 from PySide6.QtCore import QObject, Signal
 from pywayland.client import Display
-from pywayland.protocol.wayland import WlCompositor, WlShm, WlSurface
-from pywayland.protocol.xdg_shell import XdgWmBase, XdgSurface, XdgToplevel
-
-# 젯슨 Wayland 디스플레이 환경 설정
-def setup_wayland_environment():
-    """Wayland 환경 설정"""
-    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
-    if not xdg_runtime_dir:
-        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
-        xdg_runtime_dir = f"/run/user/{user_id}"
-        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
-    
-    wayland_display = os.getenv('WAYLAND_DISPLAY')
-    if not wayland_display:
-        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
-        
-        for display_name in possible_displays:
-            socket_path = os.path.join(xdg_runtime_dir, display_name)
-            if os.path.exists(socket_path):
-                os.environ['WAYLAND_DISPLAY'] = display_name
-                wayland_display = display_name
-                break
-    
-    return wayland_display, xdg_runtime_dir
-
-# Wayland 환경 설정 - 에러 시 조용히 넘어감 (ps_camera.py에서 처리)
-try:
-    setup_wayland_environment()
-except:
-    pass  # 메인에서 처리하도록 함
+from pywayland.protocol.wayland import WlCompositor, WlShm
+from pywayland.protocol.xdg_shell import XdgWmBase
 
 class VSyncFrameTimer(QObject):
     """Wayland VSync 동기화 프레임 신호 발생기"""

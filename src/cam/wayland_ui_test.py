@@ -10,34 +10,14 @@ import sys
 import os
 import numpy as np
 import cv2
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage
-
-# 직접 import (프로젝트 루트에서 실행 시)
 from ps_camera_modules.timer import VSyncFrameTimer
-
-# Jetson Wayland display environment setup (SSH connection) - from ps_camera.py
-def setup_wayland_environment():
-    """Wayland 환경 설정"""
-    xdg_runtime_dir = os.getenv('XDG_RUNTIME_DIR')
-    if not xdg_runtime_dir:
-        user_id = os.getuid() if hasattr(os, 'getuid') else 1000
-        xdg_runtime_dir = f"/run/user/{user_id}"
-        os.environ['XDG_RUNTIME_DIR'] = xdg_runtime_dir
-    
-    wayland_display = os.getenv('WAYLAND_DISPLAY')
-    if not wayland_display:
-        possible_displays = ['wayland-0', 'wayland-1', 'weston-wayland-0', 'weston-wayland-1']
-        
-        for display_name in possible_displays:
-            socket_path = os.path.join(xdg_runtime_dir, display_name)
-            if os.path.exists(socket_path):
-                os.environ['WAYLAND_DISPLAY'] = display_name
-                wayland_display = display_name
-                break
-    
-    return wayland_display, xdg_runtime_dir
+from _lib.wayland_utils import setup_wayland_environment
 
 # Wayland environment setup - wayland_test.py style
 wayland_display, xdg_runtime_dir = setup_wayland_environment()

@@ -1,11 +1,8 @@
 #coding=utf-8
+
+
 import sys
-import os
-
-# src/_lib 경로를 추가하여 mvsdk 모듈 import 가능하게 함
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', '_lib'))
-
-import mvsdk
+from _lib import mvsdk
 from config import CAMERA_IP, SUBNET_MASK, GATEWAY, PERSISTENT
 
 def set_camera_ip():

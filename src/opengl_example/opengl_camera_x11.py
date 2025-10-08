@@ -8,9 +8,6 @@ import os
 import time
 import threading
 
-# 프로젝트 루트 경로 추가 (config import를 위해)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage, QGuiApplication, QWindow
