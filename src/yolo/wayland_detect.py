@@ -8,10 +8,13 @@ import cv2
 from _lib import mvsdk
 from _lib.wayland_utils import setup_wayland_environment
 from ultralytics import YOLO
-from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, 
+                                QPushButton, QHBoxLayout, QSizePolicy, QComboBox, QSlider, 
+                                QCheckBox, QGroupBox, QGridLayout)
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap
 from config import CAMERA_IP
+import time
 
 # Wayland 환경 설정
 wayland_display, xdg_runtime_dir = setup_wayland_environment()
@@ -44,8 +47,18 @@ class YOLOCameraWindow(QMainWindow):
         # 카메라 변수
         self.hCamera = None
         self.pFrameBuffer = None
+        self.camera_capability = None
         self.frame_count = 0
         self.is_running = False
+        
+        # 노출 시간 범위
+        self.exposure_min = 0
+        self.exposure_max_hw = 0
+        
+        # FPS 계산용
+        self.fps_start_time = time.time()
+        self.fps_frame_count = 0
+        self.current_fps = 0.0
 
         # UI 초기화
         self.init_ui()
@@ -63,23 +76,23 @@ class YOLOCameraWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        layout = QVBoxLayout()
+        main_layout = QHBoxLayout()
         
-        # 비디오 표시 라벨
+        # 왼쪽: 비디오 영역
+        video_layout = QVBoxLayout()
+        
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("background-color: black;")
         self.video_label.setMinimumSize(640, 480)
-        layout.addWidget(self.video_label)
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        video_layout.addWidget(self.video_label, stretch=1)
         
-        # 상태 라벨
         self.status_label = QLabel("초기화 중...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.status_label)
+        video_layout.addWidget(self.status_label)
         
-        # 버튼 레이아웃
         button_layout = QHBoxLayout()
-        
         self.start_button = QPushButton("시작")
         self.start_button.clicked.connect(self.start_capture)
         button_layout.addWidget(self.start_button)
@@ -93,9 +106,76 @@ class YOLOCameraWindow(QMainWindow):
         self.quit_button.clicked.connect(self.close)
         button_layout.addWidget(self.quit_button)
         
-        layout.addLayout(button_layout)
+        video_layout.addLayout(button_layout)
+        main_layout.addLayout(video_layout, stretch=3)
         
-        central_widget.setLayout(layout)
+        # 오른쪽: 카메라 컨트롤 패널
+        control_panel = self.create_control_panel()
+        main_layout.addWidget(control_panel, stretch=1)
+        
+        central_widget.setLayout(main_layout)
+    
+    def create_control_panel(self):
+        """카메라 컨트롤 패널 생성"""
+        control_group = QGroupBox("설정")
+        layout = QGridLayout()
+        
+        row = 0
+        
+        # 모델 선택
+        layout.addWidget(QLabel("모델:"), row, 0)
+        self.model_combo = QComboBox()
+        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
+        layout.addWidget(self.model_combo, row, 1)
+        row += 1
+        
+        # FPS 설정
+        layout.addWidget(QLabel("타겟 FPS:"), row, 0)
+        self.fps_slider = QSlider(Qt.Horizontal)
+        self.fps_slider.setMinimum(15)
+        self.fps_slider.setMaximum(60)
+        self.fps_slider.setValue(30)
+        self.fps_slider.valueChanged.connect(self.on_fps_changed)
+        self.fps_slider.setEnabled(False)
+        layout.addWidget(self.fps_slider, row, 1)
+        row += 1
+        
+        self.fps_label = QLabel("30 FPS")
+        self.fps_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.fps_label, row, 0, 1, 2)
+        row += 1
+        
+        # 최대 노출 시간
+        layout.addWidget(QLabel("최대 노출 (μs):"), row, 0)
+        self.exposure_slider = QSlider(Qt.Horizontal)
+        self.exposure_slider.valueChanged.connect(self.on_max_exposure_changed)
+        self.exposure_slider.setEnabled(False)
+        layout.addWidget(self.exposure_slider, row, 1)
+        row += 1
+        
+        self.exposure_label = QLabel("0")
+        self.exposure_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.exposure_label, row, 0, 1, 2)
+        row += 1
+        
+        # 게인
+        layout.addWidget(QLabel("게인:"), row, 0)
+        self.gain_slider = QSlider(Qt.Horizontal)
+        self.gain_slider.valueChanged.connect(self.on_gain_changed)
+        self.gain_slider.setEnabled(False)
+        layout.addWidget(self.gain_slider, row, 1)
+        row += 1
+        
+        self.gain_label = QLabel("0")
+        self.gain_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.gain_label, row, 0, 1, 2)
+        row += 1
+        
+        layout.setRowStretch(row, 1)
+        control_group.setLayout(layout)
+        control_group.setMaximumWidth(300)
+        
+        return control_group
     
     def init_camera(self):
         """카메라 초기화"""
@@ -121,24 +201,21 @@ class YOLOCameraWindow(QMainWindow):
             print("✅ 카메라 초기화 성공")
             
             # 카메라 정보 가져오기
-            cap = mvsdk.CameraGetCapability(self.hCamera)
+            self.camera_capability = mvsdk.CameraGetCapability(self.hCamera)
             
-            # 카메라를 자동 노출 모드로 설정
-            print("🔧 자동 노출 모드 설정 중...")
-            mvsdk.CameraSetAeState(self.hCamera, True)  # 자동 노출 활성화
-            print("✅ 자동 노출 모드 활성화")
-            
-            # 자동 화이트밸런스 활성화
+            # 자동 화이트밸런스 활성화 (기본값)
             mvsdk.CameraSetWbMode(self.hCamera, True)
-            print("✅ 자동 화이트밸런스 활성화")
             
             # 카메라 재생 시작
             mvsdk.CameraPlay(self.hCamera)
             print("✅ 카메라 재생 시작")
             
             # 프레임 버퍼 할당
-            FrameBufferSize = cap.sResolutionRange.iWidthMax * cap.sResolutionRange.iHeightMax * 3
+            FrameBufferSize = self.camera_capability.sResolutionRange.iWidthMax * self.camera_capability.sResolutionRange.iHeightMax * 3
             self.pFrameBuffer = mvsdk.CameraAlignMalloc(FrameBufferSize, 16)
+            
+            # UI 컨트롤 초기화
+            self.init_camera_controls()
             
             self.status_label.setText("카메라 준비 완료 - 시작 버튼을 클릭하세요")
             
@@ -147,14 +224,135 @@ class YOLOCameraWindow(QMainWindow):
             self.status_label.setText(f"카메라 초기화 실패: {e}")
             self.start_button.setEnabled(False)
     
+    def init_camera_controls(self):
+        """카메라 컨트롤 UI 초기화"""
+        if self.hCamera is None or self.camera_capability is None:
+            return
+        
+        try:
+            # 노출 범위 설정
+            exp_range = self.camera_capability.sExposeDesc
+            self.exposure_min = exp_range.uiExposeTimeMin
+            self.exposure_max_hw = exp_range.uiExposeTimeMax
+            
+            # 최대 노출 슬라이더 설정
+            self.exposure_slider.setMinimum(self.exposure_min)
+            self.exposure_slider.setMaximum(self.exposure_max_hw)
+            
+            # FPS에 따른 최대 노출 설정 (30 FPS 기본)
+            target_fps = 30
+            max_exposure_for_fps = int(1000000 / target_fps * 0.9)
+            initial_max_exposure = min(max_exposure_for_fps, self.exposure_max_hw)
+            self.exposure_slider.setValue(initial_max_exposure)
+            self.exposure_label.setText(f"{initial_max_exposure}")
+            
+            # 자동 노출 켜기 (기본값)
+            mvsdk.CameraSetAeState(self.hCamera, True)
+            mvsdk.CameraSetAeExposureRange(self.hCamera, self.exposure_min, initial_max_exposure)
+            
+            # 게인 슬라이더 설정
+            gain_range = self.camera_capability.sRgbGainRange
+            self.gain_slider.setMinimum(gain_range.iRGainMin)
+            self.gain_slider.setMaximum(gain_range.iRGainMax)
+            r_gain, g_gain, b_gain = mvsdk.CameraGetGain(self.hCamera)
+            self.gain_slider.setValue(r_gain)
+            self.gain_label.setText(f"{r_gain}")
+            
+            # 컨트롤 활성화
+            self.fps_slider.setEnabled(True)
+            self.exposure_slider.setEnabled(True)
+            self.gain_slider.setEnabled(True)
+            
+            print("✅ 카메라 컨트롤 UI 초기화 완료")
+            
+        except Exception as e:
+            print(f"⚠️ 카메라 컨트롤 초기화 실패: {e}")
+    
+    def on_model_changed(self, index):
+        """모델 변경 이벤트"""
+        if index < 0:
+            return
+        
+        try:
+            model_path = self.model_combo.itemData(index)
+            if model_path:
+                print(f"🔧 모델 로드 중: {model_path}")
+                self.model = YOLO(model_path)
+                print(f"✅ 모델 변경 완료: {Path(model_path).name}")
+        except Exception as e:
+            print(f"❌ 모델 변경 실패: {e}")
+    
+    def on_fps_changed(self, fps):
+        """FPS 변경 이벤트 (실시간 적용)"""
+        if self.hCamera is None:
+            return
+        
+        try:
+            self.fps_label.setText(f"{fps} FPS")
+            
+            # FPS에 따른 최대 노출 계산 및 제안
+            max_exposure_for_fps = int(1000000 / fps * 0.9)
+            suggested_max = min(max_exposure_for_fps, self.exposure_max_hw)
+            
+            # 현재 최대 노출이 FPS에 맞지 않으면 자동 조정
+            current_max = self.exposure_slider.value()
+            if current_max > max_exposure_for_fps:
+                self.exposure_slider.setValue(suggested_max)
+                mvsdk.CameraSetAeExposureRange(self.hCamera, self.exposure_min, suggested_max)
+                print(f"✅ 타겟 FPS: {fps}, 최대 노출 자동 조정: {suggested_max} μs")
+            else:
+                print(f"✅ 타겟 FPS: {fps}")
+        except Exception as e:
+            print(f"❌ FPS 변경 실패: {e}")
+    
+    def on_max_exposure_changed(self, value):
+        """최대 노출 시간 변경 이벤트"""
+        if self.hCamera is None:
+            return
+        
+        try:
+            self.exposure_label.setText(f"{value}")
+            mvsdk.CameraSetAeExposureRange(self.hCamera, self.exposure_min, value)
+        except Exception as e:
+            print(f"❌ 최대 노출 변경 실패: {e}")
+    
+    def on_gain_changed(self, value):
+        """게인 변경 이벤트"""
+        if self.hCamera is None:
+            return
+        
+        try:
+            mvsdk.CameraSetGain(self.hCamera, value, value, value)
+            self.gain_label.setText(f"{value}")
+        except Exception as e:
+            print(f"❌ 게인 변경 실패: {e}")
+    
     def init_yolo(self):
         """YOLO 모델 초기화"""
         try:
-            print("🔧 YOLO 모델 로드 중...")
+            print("🔧 YOLO 모델 검색 중...")
             script_dir = Path(__file__).parent
-            model_path = script_dir / "models/yolo8n_trash.pt"
-            self.model = YOLO(model_path)
-            print("✅ YOLO 모델 로드 완료")
+            models_dir = script_dir / "models"
+            
+            # .engine 파일 목록 가져오기
+            engine_files = sorted(models_dir.glob("*.engine"))
+            
+            if not engine_files:
+                print("⚠️ .engine 파일을 찾을 수 없습니다")
+                self.status_label.setText("모델 파일(.engine)을 찾을 수 없습니다")
+                self.start_button.setEnabled(False)
+                return
+            
+            # 모델 목록을 콤보박스에 추가
+            for model_file in engine_files:
+                model_name = model_file.name
+                self.model_combo.addItem(model_name, str(model_file))
+            
+            # 첫 번째 모델 로드
+            first_model = str(engine_files[0])
+            self.model = YOLO(first_model)
+            print(f"✅ YOLO 모델 로드 완료: {engine_files[0].name}")
+            
         except Exception as e:
             print(f"❌ YOLO 모델 로드 실패: {e}")
             self.status_label.setText(f"YOLO 모델 로드 실패: {e}")
@@ -163,13 +361,16 @@ class YOLOCameraWindow(QMainWindow):
     def start_capture(self):
         """캡처 시작"""
         if self.hCamera is None:
-            self.status_label.setText("카메가 초기화되지 않았습니다")
+            self.status_label.setText("카메라가 초기화되지 않았습니다")
             return
         
         self.is_running = True
+        self.fps_start_time = time.time()
+        self.fps_frame_count = 0
         self.timer.start(30)  # 30ms 간격 (~33 FPS)
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+        self.model_combo.setEnabled(False)
         self.status_label.setText("실시간 객체 탐지 중...")
         print("\n🎬 실시간 객체 탐지 시작")
         print("=" * 50)
@@ -180,6 +381,7 @@ class YOLOCameraWindow(QMainWindow):
         self.timer.stop()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        self.model_combo.setEnabled(True)
         self.status_label.setText("중지됨 - 시작 버튼을 클릭하여 재시작")
         print("\n⏸️ 캡처 중지")
     
@@ -204,8 +406,10 @@ class YOLOCameraWindow(QMainWindow):
             # BGR로 변환 (YOLO 추론용)
             frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             
-            # YOLO 추론 수행
+            # YOLO 추론 수행 (시간 측정)
+            infer_start = time.time()
             results = self.model(frame_bgr, verbose=False)
+            infer_time = (time.time() - infer_start) * 1000  # ms 단위
             
             # 결과를 프레임에 그리기
             annotated_frame = results[0].plot()
@@ -223,12 +427,17 @@ class YOLOCameraWindow(QMainWindow):
             scaled_pixmap = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.video_label.setPixmap(scaled_pixmap)
             
-            # 프레임 카운터 업데이트
-            self.frame_count += 1
-            if self.frame_count % 30 == 0:
-                detected_objects = len(results[0].boxes)
-                self.status_label.setText(f"프레임: {self.frame_count} | 탐지된 객체: {detected_objects}")
-                print(f"📊 프레임: {self.frame_count} | 탐지된 객체: {detected_objects}")
+            # FPS 계산
+            self.fps_frame_count += 1
+            elapsed_time = time.time() - self.fps_start_time
+            if elapsed_time >= 1.0:
+                self.current_fps = self.fps_frame_count / elapsed_time
+                self.fps_start_time = time.time()
+                self.fps_frame_count = 0
+            
+            # 상태 업데이트
+            detected_objects = len(results[0].boxes)
+            self.status_label.setText(f"FPS: {self.current_fps:.1f} | 추론: {infer_time:.1f}ms | 탐지: {detected_objects}")
             
         except mvsdk.CameraException as e:
             if e.error_code != mvsdk.CAMERA_STATUS_TIME_OUT:
