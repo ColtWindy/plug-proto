@@ -83,13 +83,19 @@ class InferenceWorker:
         while self.running:
             try:
                 frame_bgr = self.input_queue.get(timeout=0.1)
+                
+                # YOLO 추론
                 start_time = time.time()
                 results = self.model(frame_bgr, verbose=False)
                 infer_time = (time.time() - start_time) * 1000
                 
+                # 결과를 프레임에 그리기
+                annotated_frame = results[0].plot()
+                detected_count = len(results[0].boxes)
+                
                 # 결과 큐에 넣기 (넘치면 드롭)
                 try:
-                    self.output_queue.put_nowait((results, infer_time))
+                    self.output_queue.put_nowait((annotated_frame, infer_time, detected_count))
                 except queue.Full:
                     pass
             except queue.Empty:
@@ -140,6 +146,10 @@ class YOLOCameraWindow(QMainWindow):
         self.trigger_thread = None
         self.trigger_running = False
         self.target_fps = 30  # 기본 FPS (슬라이더 초기값과 동일)
+        
+        # 이미지 정보
+        self.frame_width = 0
+        self.frame_height = 0
 
         # UI 초기화
         self.init_ui()
@@ -208,6 +218,14 @@ class YOLOCameraWindow(QMainWindow):
         self.model_combo = QComboBox()
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         layout.addWidget(self.model_combo, row, 1)
+        row += 1
+        
+        # 카메라 해상도 선택
+        layout.addWidget(QLabel("카메라 해상도:"), row, 0)
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.currentIndexChanged.connect(self.on_resolution_changed)
+        self.resolution_combo.setEnabled(False)
+        layout.addWidget(self.resolution_combo, row, 1)
         row += 1
         
         # FPS 설정
@@ -315,6 +333,25 @@ class YOLOCameraWindow(QMainWindow):
             return
         
         try:
+            # 해상도 목록 가져오기
+            preset_sizes = mvsdk.CameraGetImageResolution(self.hCamera)
+            self.resolution_combo.clear()
+            
+            # capability에서 미리 설정된 해상도 목록 가져오기
+            resolution_count = self.camera_capability.iImageSizeDesc
+            current_index = 0
+            
+            for i in range(resolution_count):
+                desc = self.camera_capability.pImageSizeDesc[i]
+                desc_text = desc.GetDescription()
+                resolution_text = f"{desc_text} ({desc.iWidth}x{desc.iHeight})"
+                self.resolution_combo.addItem(resolution_text, desc)
+                if desc.iWidth == preset_sizes.iWidth and desc.iHeight == preset_sizes.iHeight:
+                    current_index = i
+            
+            self.resolution_combo.setCurrentIndex(current_index)
+            self.resolution_combo.setEnabled(True)
+            
             # 노출 범위 설정
             exp_range = self.camera_capability.sExposeDesc
             self.exposure_min = exp_range.uiExposeTimeMin
@@ -333,9 +370,6 @@ class YOLOCameraWindow(QMainWindow):
             
             # 자동 노출 켜기 (기본값)
             mvsdk.CameraSetAeState(self.hCamera, True)
-            
-            # 최대 노출 시간 설정 (double 타입)
-            max_exposure_ms = initial_max_exposure / 1000.0  # us -> ms
             mvsdk.CameraSetAeExposureRange(self.hCamera, float(self.exposure_min), float(initial_max_exposure))
             
             print(f"✅ 자동 노출 범위 설정: {self.exposure_min}~{initial_max_exposure} μs")
@@ -371,6 +405,36 @@ class YOLOCameraWindow(QMainWindow):
                 print(f"✅ 모델 변경 완료: {Path(model_path).name}")
         except Exception as e:
             print(f"❌ 모델 변경 실패: {e}")
+    
+    def on_resolution_changed(self, index):
+        """카메라 해상도 변경 이벤트"""
+        if self.hCamera is None or self.is_running:
+            return
+        
+        try:
+            resolution = self.resolution_combo.itemData(index)
+            if resolution:
+                # 카메라 정지
+                was_playing = True
+                try:
+                    mvsdk.CameraStop(self.hCamera)
+                except:
+                    was_playing = False
+                
+                # 해상도 변경
+                mvsdk.CameraSetImageResolution(self.hCamera, resolution)
+                
+                # 카메라 재시작
+                if was_playing:
+                    mvsdk.CameraPlay(self.hCamera)
+                
+                # 프레임 크기 초기화 (새 해상도로 업데이트)
+                self.frame_width = 0
+                self.frame_height = 0
+                
+                print(f"✅ 카메라 해상도 변경: {resolution.iWidth}x{resolution.iHeight}")
+        except Exception as e:
+            print(f"❌ 해상도 변경 실패: {e}")
     
     def on_fps_changed(self, fps):
         """FPS 변경 이벤트 (실시간 적용)"""
@@ -500,6 +564,10 @@ class YOLOCameraWindow(QMainWindow):
         if not self.is_running or self.inference_worker is None:
             return
         
+        # 프레임 크기 저장 (첫 프레임에서 한 번만)
+        if self.frame_width == 0 or self.frame_height == 0:
+            self.frame_height, self.frame_width = frame_bgr.shape[:2]
+        
         # 추론 워커에 제출
         self.inference_worker.submit(frame_bgr)
     
@@ -513,11 +581,8 @@ class YOLOCameraWindow(QMainWindow):
         if result is None:
             return
         
-        results, infer_time = result
+        annotated_frame, infer_time, detected_count = result
         self.last_infer_time = infer_time
-        
-        # 결과를 프레임에 그리기
-        annotated_frame = results[0].plot()
         
         # BGR을 RGB로 변환
         annotated_frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
@@ -547,8 +612,13 @@ class YOLOCameraWindow(QMainWindow):
             self.fps_frame_count = 0
         
         # 상태 업데이트
-        detected_objects = len(results[0].boxes)
-        self.status_label.setText(f"FPS: {self.current_fps:.1f} | 추론: {self.last_infer_time:.1f}ms | 탐지: {detected_objects}")
+        status_text = f"FPS: {self.current_fps:.1f} | 추론: {self.last_infer_time:.1f}ms | 탐지: {detected_count}"
+        
+        # 카메라 해상도 추가
+        if self.frame_width > 0 and self.frame_height > 0:
+            status_text += f" | 해상도: {self.frame_width}x{self.frame_height}"
+        
+        self.status_label.setText(status_text)
     
     def start_capture(self):
         """캡처 시작"""
@@ -560,6 +630,8 @@ class YOLOCameraWindow(QMainWindow):
         self.fps_start_time = time.time()
         self.fps_frame_count = 0
         self._scaled_cache = None
+        self.frame_width = 0
+        self.frame_height = 0
         
         # 추론 워커 시작
         self.inference_worker = InferenceWorker(self.model)
@@ -581,7 +653,9 @@ class YOLOCameraWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.model_combo.setEnabled(False)
+        self.resolution_combo.setEnabled(False)
         self.status_label.setText("실시간 객체 탐지 중...")
+        
         print(f"\n🎬 실시간 객체 탐지 시작 (타겟 FPS: {self.target_fps})")
         print("=" * 50)
     
@@ -612,6 +686,7 @@ class YOLOCameraWindow(QMainWindow):
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.model_combo.setEnabled(True)
+        self.resolution_combo.setEnabled(True)
         self.status_label.setText("중지됨 - 시작 버튼을 클릭하여 재시작")
         print("\n⏸️ 캡처 중지")
     
