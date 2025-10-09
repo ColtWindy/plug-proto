@@ -33,7 +33,7 @@ import os
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                 QHBoxLayout, QLabel, QComboBox, QPushButton, 
-                                QTextEdit, QGroupBox, QGridLayout, QProgressBar)
+                                QTextEdit, QGroupBox, QGridLayout, QProgressBar, QListWidget)
 from PySide6.QtCore import Qt, QThread, Signal
 
 # 프로젝트 루트 경로 추가
@@ -60,68 +60,95 @@ else:
 
 
 class ConvertWorker(QThread):
-    """변환 작업 워커"""
+    """변환 작업 워커 (여러 작업 순차 실행)"""
     progress = Signal(str)
     finished = Signal(bool, str)
+    task_completed = Signal(int, bool)  # (작업 인덱스, 성공 여부)
     
-    def __init__(self, model_path, config):
+    def __init__(self, tasks):
         super().__init__()
-        self.model_path = model_path
-        self.config = config
+        self.tasks = tasks  # [(model_path, config), ...]
     
     def run(self):
-        try:
-            # 출력 파일명 결정
-            models_dir = Path(self.model_path).parent
-            output_name = f"{Path(self.model_path).stem}_{self.config['name']}.engine"
-            output_path = models_dir / output_name
-            
-            # 파일이 이미 존재하는지 확인
-            if output_path.exists():
-                self.progress.emit(f"ℹ️ 파일이 이미 존재합니다: {output_name}")
-                self.progress.emit("   변환을 건너뜁니다.")
-                self.finished.emit(True, f"✅ 기존 파일 사용: {output_name}")
-                return
-            
-            self.progress.emit(f"🚀 변환 시작: {self.config['name']}")
-            self.progress.emit(f"   모델: {Path(self.model_path).name}")
-            self.progress.emit(f"   이미지 크기: {self.config['imgsz']}")
-            self.progress.emit(f"   정밀도: {self.config['precision']}")
-            self.progress.emit("")
-            
-            # 모델 로드
-            model = YOLO(self.model_path)
-            
-            # export 파라미터
-            export_params = {
-                "format": "engine",
-                "imgsz": self.config["imgsz"],
-                "half": self.config["half"],
-                "int8": self.config["int8"],
-                "workspace": self.config["workspace"],
-                "simplify": True,
-                "verbose": False,
-            }
-            
-            # INT8 캘리브레이션
-            if self.config["int8"]:
-                export_params["data"] = "coco128.yaml"
-            
-            # 변환 실행
-            self.progress.emit("⏳ 변환 중... (수 분 소요)")
-            model.export(**export_params)
-            
-            # 기본 이름으로 생성된 파일을 커스텀 이름으로 변경
-            default_name = Path(self.model_path).stem + ".engine"
-            default_path = models_dir / default_name
-            
-            if default_path.exists() and default_path != output_path:
-                default_path.rename(output_path)
-            
-            self.finished.emit(True, f"✅ 변환 완료: {output_name}")
-            
-        except Exception as e:
-            self.finished.emit(False, f"❌ 변환 실패: {e}")
+        """여러 작업 순차 실행"""
+        total = len(self.tasks)
+        success_count = 0
+        skip_count = 0
+        fail_count = 0
+        
+        for idx, (model_path, config) in enumerate(self.tasks):
+            try:
+                self.progress.emit("")
+                self.progress.emit(f"{'='*50}")
+                self.progress.emit(f"작업 {idx+1}/{total}: {config['name']}")
+                self.progress.emit(f"{'='*50}")
+                
+                # 출력 파일명 결정
+                models_dir = Path(model_path).parent
+                output_name = f"{Path(model_path).stem}_{config['name']}.engine"
+                output_path = models_dir / output_name
+                
+                # 파일이 이미 존재하는지 확인
+                if output_path.exists():
+                    self.progress.emit(f"ℹ️ 파일이 이미 존재합니다: {output_name}")
+                    self.progress.emit("   변환을 건너뜁니다.")
+                    skip_count += 1
+                    self.task_completed.emit(idx, True)
+                    continue
+                
+                self.progress.emit(f"🚀 변환 시작")
+                self.progress.emit(f"   모델: {Path(model_path).name}")
+                self.progress.emit(f"   정밀도: {config['precision']}")
+                self.progress.emit(f"   이미지 크기: {config['imgsz']}px")
+                self.progress.emit(f"   Workspace: {config['workspace']}GB")
+                self.progress.emit("")
+                
+                # 모델 로드
+                model = YOLO(model_path)
+                
+                # export 파라미터
+                export_params = {
+                    "format": "engine",
+                    "imgsz": config["imgsz"],
+                    "half": config["half"],
+                    "int8": config["int8"],
+                    "workspace": config["workspace"],
+                    "simplify": True,
+                    "verbose": False,
+                }
+                
+                # INT8 캘리브레이션
+                if config["int8"]:
+                    export_params["data"] = "coco128.yaml"
+                    self.progress.emit("   INT8 캘리브레이션: coco128.yaml")
+                
+                # 변환 실행
+                self.progress.emit("⏳ 변환 중... (수 분 소요)")
+                model.export(**export_params)
+                
+                # 기본 이름으로 생성된 파일을 커스텀 이름으로 변경
+                default_name = Path(model_path).stem + ".engine"
+                default_path = models_dir / default_name
+                
+                if default_path.exists() and default_path != output_path:
+                    default_path.rename(output_path)
+                
+                self.progress.emit(f"✅ 완료: {output_name}")
+                success_count += 1
+                self.task_completed.emit(idx, True)
+                
+            except Exception as e:
+                self.progress.emit(f"❌ 실패: {e}")
+                fail_count += 1
+                self.task_completed.emit(idx, False)
+        
+        # 최종 결과
+        self.progress.emit("")
+        self.progress.emit(f"{'='*50}")
+        self.progress.emit(f"📊 변환 완료: 성공 {success_count}, 건너뜀 {skip_count}, 실패 {fail_count}")
+        self.progress.emit(f"{'='*50}")
+        
+        self.finished.emit(fail_count == 0, f"완료: {success_count}/{total}")
 
 
 class ConvertWindow(QMainWindow):
@@ -130,9 +157,10 @@ class ConvertWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TensorRT 모델 변환")
-        self.setGeometry(100, 100, 700, 600)
+        self.setGeometry(100, 100, 900, 700)
         
         self.worker = None
+        self.task_queue = []  # [(model_path, config), ...]
         self.init_ui()
         self.load_models()
     
@@ -140,7 +168,10 @@ class ConvertWindow(QMainWindow):
         """UI 초기화"""
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        main_layout = QHBoxLayout(central)
+        
+        # 왼쪽: 설정
+        left_layout = QVBoxLayout()
         
         # 설정 그룹
         settings_group = QGroupBox("변환 설정")
@@ -197,11 +228,33 @@ class ConvertWindow(QMainWindow):
         row += 1
         
         settings_group.setLayout(settings_layout)
-        layout.addWidget(settings_group)
+        left_layout.addWidget(settings_group)
         
-        # 변환 버튼
+        # 버튼 레이아웃
+        button_layout = QHBoxLayout()
+        
+        # 추가 버튼
+        self.add_btn = QPushButton("➕ 목록에 추가")
+        self.add_btn.clicked.connect(self.add_to_queue)
+        self.add_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                padding: 10px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+        """)
+        button_layout.addWidget(self.add_btn)
+        
+        # 변환 시작 버튼
         self.convert_btn = QPushButton("🚀 변환 시작")
         self.convert_btn.clicked.connect(self.start_convert)
+        self.convert_btn.setEnabled(False)  # 초기에는 비활성화
         self.convert_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3498db;
@@ -218,43 +271,66 @@ class ConvertWindow(QMainWindow):
                 background-color: #95a5a6;
             }
         """)
-        layout.addWidget(self.convert_btn)
+        button_layout.addWidget(self.convert_btn)
+        
+        left_layout.addLayout(button_layout)
         
         # 진행률 표시
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 0)  # Indeterminate
-        layout.addWidget(self.progress_bar)
-        
-        # 로그 출력
-        log_label = QLabel("변환 로그:")
-        layout.addWidget(log_label)
-        
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(250)
-        layout.addWidget(self.log_text)
+        left_layout.addWidget(self.progress_bar)
         
         # 안내 메시지
         info_text = """
-📋 옵션 직접 선택:
-   정밀도: FP32 / FP16 ⭐ / INT8
-   이미지 크기: 320 / 480 / 640 ⭐ / 1280
-   Workspace: 2GB / 4GB ⭐ / 8GB
-   Simplify: True (고정)
-   
-💡 성능 비교 (Jetson Orin Nano Super):
-   FP16 640: ~112ms (메모리 50%↓) ⭐ 권장
-   INT8 640: ~62ms (정확도 97%)
-   
-📂 파일명: 모델_정밀도_크기_워크스페이스.engine
-   예: yolo8n_trash_fp16_640_4gb.engine
+💡 사용 방법:
+   1. 설정 조정
+   2. "목록에 추가" 클릭
+   3. 여러 설정 추가 가능
+   4. "변환 시작"으로 일괄 변환
 
-ℹ️ 동일 파일이 있으면 변환 건너뜀
+📊 성능 (Jetson Orin Nano Super):
+   FP16 640: ~112ms ⭐ 권장
+   INT8 640: ~62ms (최고 속도)
         """
         info_label = QLabel(info_text)
-        info_label.setStyleSheet("background-color: #ecf0f1; padding: 10px; border-radius: 5px;")
-        layout.addWidget(info_label)
+        info_label.setStyleSheet("background-color: #ecf0f1; padding: 8px; border-radius: 5px; font-size: 11px;")
+        left_layout.addWidget(info_label)
+        
+        main_layout.addLayout(left_layout, stretch=1)
+        
+        # 오른쪽: 작업 목록
+        right_layout = QVBoxLayout()
+        
+        queue_label = QLabel("변환 작업 목록:")
+        right_layout.addWidget(queue_label)
+        
+        self.task_list = QListWidget()
+        right_layout.addWidget(self.task_list)
+        
+        # 목록 제어 버튼
+        list_btn_layout = QHBoxLayout()
+        
+        self.clear_btn = QPushButton("전체 삭제")
+        self.clear_btn.clicked.connect(self.clear_queue)
+        list_btn_layout.addWidget(self.clear_btn)
+        
+        self.remove_btn = QPushButton("선택 삭제")
+        self.remove_btn.clicked.connect(self.remove_selected)
+        list_btn_layout.addWidget(self.remove_btn)
+        
+        right_layout.addLayout(list_btn_layout)
+        
+        # 로그 출력
+        log_label = QLabel("변환 로그:")
+        right_layout.addWidget(log_label)
+        
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(200)
+        right_layout.addWidget(self.log_text)
+        
+        main_layout.addLayout(right_layout, stretch=1)
     
     def load_models(self):
         """모델 파일 로드"""
@@ -306,14 +382,13 @@ class ConvertWindow(QMainWindow):
         """로그 추가"""
         self.log_text.append(message)
     
-    def start_convert(self):
-        """변환 시작"""
+    def add_to_queue(self):
+        """현재 설정을 작업 목록에 추가"""
         model_path = self.model_combo.currentData()
         if not model_path:
             self.log("❌ 모델을 선택해주세요")
             return
         
-        # 설정 준비
         precision = self.precision_combo.currentData()
         imgsz = self.imgsz_combo.currentData()
         workspace = self.workspace_combo.currentData()
@@ -327,50 +402,104 @@ class ConvertWindow(QMainWindow):
             "precision": precision.upper(),
         }
         
+        model_name = Path(model_path).stem
+        output_filename = f"{model_name}_{config['name']}.engine"
+        
+        # 중복 체크
+        for existing_path, existing_config in self.task_queue:
+            if existing_path == model_path and existing_config['name'] == config['name']:
+                self.log(f"⚠️ 이미 목록에 있습니다: {output_filename}")
+                return
+        
+        # 작업 추가
+        self.task_queue.append((model_path, config))
+        
+        # 목록에 표시
+        display_text = f"{output_filename} ({config['precision']}, {imgsz}px, {workspace}GB)"
+        self.task_list.addItem(display_text)
+        
+        self.log(f"➕ 추가됨: {output_filename}")
+        
+        # 변환 버튼 활성화
+        if len(self.task_queue) > 0:
+            self.convert_btn.setEnabled(True)
+    
+    def clear_queue(self):
+        """작업 목록 전체 삭제"""
+        self.task_queue.clear()
+        self.task_list.clear()
+        self.log("🗑️ 작업 목록이 초기화되었습니다")
+        self.convert_btn.setEnabled(False)
+    
+    def remove_selected(self):
+        """선택된 작업 삭제"""
+        current_row = self.task_list.currentRow()
+        if current_row >= 0:
+            self.task_list.takeItem(current_row)
+            del self.task_queue[current_row]
+            self.log(f"🗑️ 작업 삭제됨 (인덱스: {current_row})")
+            
+            if len(self.task_queue) == 0:
+                self.convert_btn.setEnabled(False)
+    
+    def start_convert(self):
+        """작업 목록의 모든 변환 시작"""
+        if len(self.task_queue) == 0:
+            self.log("❌ 작업 목록이 비어있습니다. '목록에 추가'를 먼저 클릭하세요")
+            return
+        
         # UI 비활성화
         self.convert_btn.setEnabled(False)
+        self.add_btn.setEnabled(False)
+        self.clear_btn.setEnabled(False)
+        self.remove_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
+        
         self.log("")
-        self.log("=" * 50)
-        self.log("📋 변환 설정:")
-        self.log(f"   모델: {Path(model_path).name}")
-        self.log(f"   정밀도: {config['precision']}")
-        self.log(f"   이미지 크기: {imgsz}px")
-        self.log(f"   Workspace: {workspace}GB")
-        self.log(f"   Simplify: True (고정)")
-        self.log(f"   출력 파일: {Path(model_path).stem}_{config['name']}.engine")
-        self.log("=" * 50)
+        self.log(f"{'='*50}")
+        self.log(f"🚀 일괄 변환 시작: {len(self.task_queue)}개 작업")
+        self.log(f"{'='*50}")
         
         # 워커 시작
-        self.worker = ConvertWorker(model_path, config)
+        self.worker = ConvertWorker(self.task_queue)
         self.worker.progress.connect(self.log)
+        self.worker.task_completed.connect(self.on_task_completed)
         self.worker.finished.connect(self.on_convert_finished)
         self.worker.start()
     
+    def on_task_completed(self, idx, success):
+        """개별 작업 완료 시 목록 업데이트"""
+        item = self.task_list.item(idx)
+        if item:
+            if success:
+                item.setForeground(Qt.darkGreen)
+            else:
+                item.setForeground(Qt.red)
+    
     def on_convert_finished(self, success, message):
-        """변환 완료"""
-        self.log(message)
-        self.log("=" * 50)
+        """모든 변환 완료"""
+        self.log("")
+        self.log("✅ 모든 작업이 완료되었습니다!")
+        self.log("")
+        self.log("📝 다음 단계:")
+        self.log("   1. python wayland_detect.py 실행")
+        self.log("   2. 모델 드롭다운에서 변환된 .engine 파일 선택")
+        self.log("   3. FPS/해상도 조정하며 성능 비교")
         
+        # UI 활성화
+        self.add_btn.setEnabled(True)
+        self.clear_btn.setEnabled(True)
+        self.remove_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        
+        # 작업 목록 초기화 여부
         if success:
             self.log("")
-            if "기존 파일" in message:
-                self.log("ℹ️ 동일 설정의 파일이 이미 존재하여 변환을 건너뛰었습니다.")
-            else:
-                self.log("✅ 변환이 완료되었습니다!")
-            
-            self.log("")
-            self.log("📝 다음 단계:")
-            self.log("   1. python wayland_detect.py 실행")
-            self.log("   2. 모델 드롭다운에서 변환된 .engine 파일 선택")
-            self.log("   3. FPS/해상도 조정하며 성능 비교")
-            self.log("")
-            self.log("💾 저장 위치: models/ 디렉토리")
-            self.log("📂 파일명 형식: 모델명_정밀도_크기.engine")
-            self.log("ℹ️ 동일 파일이 있으면 변환하지 않습니다")
+            self.log("🗑️ 작업 목록을 초기화합니다")
+            self.clear_queue()
+        else:
+            self.convert_btn.setEnabled(True)
         
-        self.convert_btn.setEnabled(True)
-        self.progress_bar.setVisible(False)
         self.worker = None
 
 
