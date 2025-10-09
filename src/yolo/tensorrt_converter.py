@@ -4,10 +4,11 @@ TensorRT 모델 변환 UI (Qt + Wayland)
 
 옵션 설명:
 -----------
-1. 정밀도 (Precision):
-   - FP32: 기본, 정확도 최고, 속도 보통
-   - FP16 ⭐ 권장: 2배 빠름, 정확도 거의 유지 (~99%), 메모리 50% 절약
-   - INT8: 최고 속도 (3-4배 빠름), 정확도 약간 감소 (~97%), 메모리 75% 절약
+1. 정밀도 (Precision) - 상호 배타적:
+   - FP32: 기본, 정확도 최고, 속도 보통 (half=False, int8=False)
+   - FP16 ⭐ 권장: 2배 빠름, 정확도 거의 유지 (~99%), 메모리 50% 절약 (half=True)
+   - INT8: 최고 속도 (3-4배 빠름), 정확도 약간 감소 (~97%), 메모리 75% 절약 (int8=True)
+   ⚠️ FP16과 INT8은 동시 사용 불가 (Ultralytics 공식 문서)
 
 2. 이미지 크기 (imgsz):
    - 320: 매우 빠름, 정확도 낮음
@@ -106,21 +107,37 @@ class ConvertWorker(QThread):
                 # 모델 로드
                 model = YOLO(model_path)
                 
-                # export 파라미터
+                # export 파라미터 (INT8과 FP16은 호환 불가)
                 export_params = {
                     "format": "engine",
                     "imgsz": config["imgsz"],
-                    "half": config["half"],
-                    "int8": config["int8"],
                     "workspace": config["workspace"],
                     "simplify": True,
                     "verbose": False,
                 }
                 
-                # INT8 캘리브레이션
+                # 정밀도 설정 (상호 배타적 - INT8과 FP16 동시 사용 불가)
                 if config["int8"]:
+                    # INT8: half 파라미터 완전 제외 (호환 불가)
+                    export_params["int8"] = True
                     export_params["data"] = "coco128.yaml"
-                    self.progress.emit("   INT8 캘리브레이션: coco128.yaml")
+                    self.progress.emit("   ✅ INT8 양자화: True (half 제외)")
+                    self.progress.emit("   ✅ 캘리브레이션: coco128.yaml")
+                elif config["half"]:
+                    # FP16: int8 파라미터 완전 제외
+                    export_params["half"] = True
+                    self.progress.emit("   ✅ FP16 (half): True (int8 제외)")
+                else:
+                    # FP32: 둘 다 제외
+                    self.progress.emit("   ✅ FP32 (기본 정밀도, half/int8 둘 다 제외)")
+                
+                # 실제 export 파라미터 확인
+                self.progress.emit("")
+                self.progress.emit("📋 실제 export 파라미터:")
+                for key, value in export_params.items():
+                    if key != "verbose":
+                        self.progress.emit(f"   {key}: {value}")
+                self.progress.emit("")
                 
                 # 변환 실행
                 self.progress.emit("⏳ 변환 중... (수 분 소요)")
@@ -284,14 +301,17 @@ class ConvertWindow(QMainWindow):
         # 안내 메시지
         info_text = """
 💡 사용 방법:
-   1. 설정 조정
-   2. "목록에 추가" 클릭
+   1. 설정 조정 (정밀도/크기/workspace)
+   2. "목록에 추가" 클릭 (중복 체크)
    3. 여러 설정 추가 가능
    4. "변환 시작"으로 일괄 변환
 
 📊 성능 (Jetson Orin Nano Super):
-   FP16 640: ~112ms ⭐ 권장
-   INT8 640: ~62ms (최고 속도)
+   FP32: ~112ms
+   FP16: ~112ms (메모리↓) ⭐ 권장
+   INT8: ~62ms (3-4배 빠름) 🚀
+
+⚠️ INT8과 FP16 동시 사용 불가
         """
         info_label = QLabel(info_text)
         info_label.setStyleSheet("background-color: #ecf0f1; padding: 8px; border-radius: 5px; font-size: 11px;")

@@ -148,6 +148,34 @@ uv run src/opengl_example/vsync_frame_counter.py
 
 ## 성능 최적화
 
+### ⚡ Jetson 성능 모드 설정 (필수)
+
+**최고 성능을 위해 반드시 실행하세요:**
+
+```bash
+# 최대 전원 모드 + 최대 클럭 활성화
+sudo nvpmodel -m 2 && sudo jetson_clocks
+```
+
+**명령어 설명**:
+- `nvpmodel -m 2`: 전원 모드를 최대 성능 모드로 설정
+  - Orin Nano Super: 모드 2 = 15W (모든 CPU/GPU 코어 활성화)
+  - 다른 모드는 전력 절약을 위해 성능 제한
+- `jetson_clocks`: 모든 CPU, GPU 클럭을 최대 주파수로 고정
+  - 기본 상태는 동적 클럭 조정 (DVFS) → 성능 변동
+  - 고정 클럭 → 일관된 최고 성능
+
+**성능 차이 (YOLO 추론 기준)**:
+- 기본 모드: ~150-200ms (불안정)
+- 최적화 모드: ~60-112ms (안정적) ⚡
+
+**재부팅 시 재설정 필요**:
+```bash
+# 부팅 시 자동 실행하려면 (선택사항)
+echo "sudo nvpmodel -m 2" >> ~/.bashrc
+echo "sudo jetson_clocks" >> ~/.bashrc
+```
+
 ### Wayland (권장)
 - 컴포지터 주도 VSync 스케줄링
 - Presentation-time 프로토콜로 정확한 타이밍
@@ -159,6 +187,8 @@ uv run src/opengl_example/vsync_frame_counter.py
 - 전체화면 모드 권장
 
 자세한 내용은 `LOG.md` 참조.
+
+**참고**: [NVIDIA Jetson 성능 최적화](https://docs.ultralytics.com/ko/guides/nvidia-jetson/#nvidia-jetson-사용-시-모범-사례)
 
 ## 문제 해결
 

@@ -137,6 +137,8 @@ class YOLOCameraWindow(QMainWindow):
         # 추론 워커
         self.inference_worker = None
         self.last_infer_time = 0.0
+        self.infer_times = []  # 추론 시간 기록 (평균 계산용)
+        self.avg_infer_time = 0.0
         
         # 캡처 스레드
         self.capture_thread = None
@@ -244,15 +246,15 @@ class YOLOCameraWindow(QMainWindow):
         layout.addWidget(self.fps_label, row, 0, 1, 2)
         row += 1
         
-        # 최대 노출 시간
-        layout.addWidget(QLabel("최대 노출 (μs):"), row, 0)
+        # 노출 시간 (수동)
+        layout.addWidget(QLabel("노출 시간 (ms):"), row, 0)
         self.exposure_slider = QSlider(Qt.Horizontal)
-        self.exposure_slider.valueChanged.connect(self.on_max_exposure_changed)
+        self.exposure_slider.valueChanged.connect(self.on_exposure_changed)
         self.exposure_slider.setEnabled(False)
         layout.addWidget(self.exposure_slider, row, 1)
         row += 1
         
-        self.exposure_label = QLabel("0")
+        self.exposure_label = QLabel("0 ms")
         self.exposure_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.exposure_label, row, 0, 1, 2)
         row += 1
@@ -357,22 +359,22 @@ class YOLOCameraWindow(QMainWindow):
             self.exposure_min = exp_range.uiExposeTimeMin
             self.exposure_max_hw = exp_range.uiExposeTimeMax
             
-            # 최대 노출 슬라이더 설정
-            self.exposure_slider.setMinimum(self.exposure_min)
-            self.exposure_slider.setMaximum(self.exposure_max_hw)
-            
-            # FPS에 따른 최대 노출 설정 (30 FPS 기본)
+            # FPS에 따른 노출 시간 계산 (수동 모드, ms 단위)
             target_fps = self.fps_slider.value()
-            max_exposure_for_fps = int(1000000 / target_fps * 0.8)  # 80% 여유
-            initial_max_exposure = min(max_exposure_for_fps, self.exposure_max_hw)
-            self.exposure_slider.setValue(initial_max_exposure)
-            self.exposure_label.setText(f"{initial_max_exposure}")
+            max_exposure_ms = int(1000 / target_fps * 0.8)  # 80% 여유 (ms)
             
-            # 자동 노출 켜기 (기본값)
-            mvsdk.CameraSetAeState(self.hCamera, True)
-            mvsdk.CameraSetAeExposureRange(self.hCamera, float(self.exposure_min), float(initial_max_exposure))
+            # 슬라이더 설정 (ms 단위)
+            self.exposure_slider.setMinimum(1)  # 최소 1ms
+            self.exposure_slider.setMaximum(max_exposure_ms)
+            self.exposure_slider.setValue(max_exposure_ms // 2)  # 절반 값으로 시작
+            self.exposure_label.setText(f"{max_exposure_ms // 2} ms")
             
-            print(f"✅ 자동 노출 범위 설정: {self.exposure_min}~{initial_max_exposure} μs")
+            # 수동 노출 모드로 설정 (opengl_camera.py 방식)
+            mvsdk.CameraSetAeState(self.hCamera, False)  # 자동 노출 끄기
+            initial_exposure_us = (max_exposure_ms // 2) * 1000  # ms -> μs
+            mvsdk.CameraSetExposureTime(self.hCamera, float(initial_exposure_us))
+            
+            print(f"✅ 수동 노출 모드: {max_exposure_ms // 2} ms (타겟 FPS: {target_fps})")
             
             # 게인 슬라이더 설정
             gain_range = self.camera_capability.sRgbGainRange
@@ -445,26 +447,32 @@ class YOLOCameraWindow(QMainWindow):
             self.fps_label.setText(f"{fps} FPS")
             self.target_fps = fps  # 타겟 FPS 저장
             
-            # FPS에 따른 최대 노출 계산
-            max_exposure_for_fps = int(1000000 / fps * 0.8)  # 80% 여유
-            suggested_max = min(max_exposure_for_fps, self.exposure_max_hw)
+            # FPS에 따른 최대 노출 계산 (ms 단위)
+            max_exposure_ms = int(1000 / fps * 0.8)  # 80% 여유
             
-            # 슬라이더 업데이트 (이벤트가 on_max_exposure_changed 호출)
-            self.exposure_slider.setValue(suggested_max)
-            print(f"✅ 타겟 FPS: {fps}, 최대 노출: {suggested_max} μs")
+            # 슬라이더 범위 조정 (ms 기반)
+            self.exposure_slider.setMaximum(max_exposure_ms)
+            
+            # 현재 값이 새 범위를 벗어나면 조정
+            if self.exposure_slider.value() > max_exposure_ms:
+                self.exposure_slider.setValue(max_exposure_ms)
+            
+            print(f"✅ 타겟 FPS: {fps}, 최대 노출: {max_exposure_ms} ms")
         except Exception as e:
             print(f"❌ FPS 변경 실패: {e}")
     
-    def on_max_exposure_changed(self, value):
-        """최대 노출 시간 변경 이벤트"""
+    def on_exposure_changed(self, value_ms):
+        """노출 시간 변경 이벤트 (수동 모드, ms 입력)"""
         if self.hCamera is None:
             return
         
         try:
-            self.exposure_label.setText(f"{value}")
-            mvsdk.CameraSetAeExposureRange(self.hCamera, self.exposure_min, value)
+            self.exposure_label.setText(f"{value_ms} ms")
+            # ms를 μs로 변환하여 카메라에 설정 (opengl_camera.py 방식)
+            exposure_us = value_ms * 1000
+            mvsdk.CameraSetExposureTime(self.hCamera, float(exposure_us))
         except Exception as e:
-            print(f"❌ 최대 노출 변경 실패: {e}")
+            print(f"❌ 노출 시간 변경 실패: {e}")
     
     def on_gain_changed(self, value):
         """게인 변경 이벤트"""
@@ -584,6 +592,12 @@ class YOLOCameraWindow(QMainWindow):
         annotated_frame, infer_time, detected_count = result
         self.last_infer_time = infer_time
         
+        # 평균 추론 시간 계산 (최근 30개 평균)
+        self.infer_times.append(infer_time)
+        if len(self.infer_times) > 30:
+            self.infer_times.pop(0)
+        self.avg_infer_time = sum(self.infer_times) / len(self.infer_times)
+        
         # BGR을 RGB로 변환
         annotated_frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
         
@@ -612,7 +626,7 @@ class YOLOCameraWindow(QMainWindow):
             self.fps_frame_count = 0
         
         # 상태 업데이트
-        status_text = f"FPS: {self.current_fps:.1f} | 추론: {self.last_infer_time:.1f}ms | 탐지: {detected_count}"
+        status_text = f"FPS: {self.current_fps:.1f} | 추론: {self.last_infer_time:.1f}ms (평균: {self.avg_infer_time:.1f}ms) | 탐지: {detected_count}"
         
         # 카메라 해상도 추가
         if self.frame_width > 0 and self.frame_height > 0:
@@ -632,6 +646,8 @@ class YOLOCameraWindow(QMainWindow):
         self._scaled_cache = None
         self.frame_width = 0
         self.frame_height = 0
+        self.infer_times = []
+        self.avg_infer_time = 0.0
         
         # 추론 워커 시작
         self.inference_worker = InferenceWorker(self.model)
