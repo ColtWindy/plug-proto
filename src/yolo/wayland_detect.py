@@ -135,6 +135,11 @@ class YOLOCameraWindow(QMainWindow):
         # 캡처 스레드
         self.capture_thread = None
         self.capture_running = False
+        
+        # 트리거 제어
+        self.trigger_thread = None
+        self.trigger_running = False
+        self.target_fps = 30  # 기본 FPS (슬라이더 초기값과 동일)
 
         # UI 초기화
         self.init_ui()
@@ -282,6 +287,10 @@ class YOLOCameraWindow(QMainWindow):
             # 자동 화이트밸런스 활성화 (기본값)
             mvsdk.CameraSetWbMode(self.hCamera, True)
             
+            # 수동 트리거 모드 설정 (FPS 정확 제어)
+            mvsdk.CameraSetTriggerMode(self.hCamera, 1)  # 1 = 수동 트리거
+            print("✅ 수동 트리거 모드 활성화")
+            
             # 카메라 재생 시작
             mvsdk.CameraPlay(self.hCamera)
             print("✅ 카메라 재생 시작")
@@ -370,6 +379,7 @@ class YOLOCameraWindow(QMainWindow):
         
         try:
             self.fps_label.setText(f"{fps} FPS")
+            self.target_fps = fps  # 타겟 FPS 저장
             
             # FPS에 따른 최대 노출 계산
             max_exposure_for_fps = int(1000000 / fps * 0.8)  # 80% 여유
@@ -434,12 +444,33 @@ class YOLOCameraWindow(QMainWindow):
             self.status_label.setText(f"YOLO 모델 로드 실패: {e}")
             self.start_button.setEnabled(False)
     
+    def _trigger_loop(self):
+        """트리거 루프 (FPS 제어)"""
+        while self.trigger_running and self.hCamera:
+            try:
+                # 타겟 FPS에 맞춰 트리거 발생
+                trigger_interval = 1.0 / self.target_fps
+                start_time = time.perf_counter()
+                
+                # 소프트 트리거 발생
+                mvsdk.CameraSoftTrigger(self.hCamera)
+                
+                # 정확한 타이밍 유지
+                elapsed = time.perf_counter() - start_time
+                sleep_time = trigger_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                    
+            except Exception as e:
+                print(f"⚠️ 트리거 오류: {e}")
+                break
+    
     def _camera_capture_loop(self):
         """카메라 캡처 루프 (별도 스레드)"""
         while self.capture_running and self.hCamera:
             try:
-                # 카메라에서 이미지 가져오기
-                pRawData, FrameHead = mvsdk.CameraGetImageBuffer(self.hCamera, 50)
+                # 카메라에서 이미지 가져오기 (트리거 대기)
+                pRawData, FrameHead = mvsdk.CameraGetImageBuffer(self.hCamera, 200)
                 
                 # 이미지를 RGB 포맷으로 변환
                 mvsdk.CameraImageProcess(self.hCamera, pRawData, self.pFrameBuffer, FrameHead)
@@ -534,6 +565,11 @@ class YOLOCameraWindow(QMainWindow):
         self.inference_worker = InferenceWorker(self.model)
         self.inference_worker.start()
         
+        # 트리거 스레드 시작 (FPS 제어)
+        self.trigger_running = True
+        self.trigger_thread = threading.Thread(target=self._trigger_loop, daemon=True)
+        self.trigger_thread.start()
+        
         # 캡처 스레드 시작
         self.capture_running = True
         self.capture_thread = threading.Thread(target=self._camera_capture_loop, daemon=True)
@@ -546,13 +582,14 @@ class YOLOCameraWindow(QMainWindow):
         self.stop_button.setEnabled(True)
         self.model_combo.setEnabled(False)
         self.status_label.setText("실시간 객체 탐지 중...")
-        print("\n🎬 실시간 객체 탐지 시작 (콜백 모드)")
+        print(f"\n🎬 실시간 객체 탐지 시작 (타겟 FPS: {self.target_fps})")
         print("=" * 50)
     
     def stop_capture(self):
         """캡처 중지"""
         self.is_running = False
         self.capture_running = False
+        self.trigger_running = False
         
         # 타이머 중지
         self.update_timer.stop()
@@ -561,6 +598,11 @@ class YOLOCameraWindow(QMainWindow):
         if self.inference_worker:
             self.inference_worker.stop()
             self.inference_worker = None
+        
+        # 트리거 스레드 대기
+        if self.trigger_thread:
+            self.trigger_thread.join(timeout=1.0)
+            self.trigger_thread = None
         
         # 캡처 스레드 대기
         if self.capture_thread:
