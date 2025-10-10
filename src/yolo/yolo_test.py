@@ -8,7 +8,6 @@ from pathlib import Path
 from _lib.wayland_utils import setup_wayland_environment
 from PySide6.QtWidgets import QApplication
 from ultralytics import YOLO
-from camera.camera_controller import CameraController
 from ui.main_window import YOLOCameraWindow
 
 
@@ -54,14 +53,6 @@ def main():
     app = QApplication(sys.argv)
     print(f"📱 Qt 플랫폼: {app.platformName()}")
     
-    # 카메라 초기화
-    camera = CameraController()
-    try:
-        camera.initialize()
-    except Exception as e:
-        print(f"❌ 카메라 초기화 실패: {e}")
-        sys.exit(1)
-    
     # YOLO 모델 로드
     model, model_list = load_models()
     if not model:
@@ -69,7 +60,7 @@ def main():
         sys.exit(1)
     
     # 메인 윈도우
-    window = YOLOCameraWindow(camera, model, model_list)
+    window = YOLOCameraWindow(model, model_list)
     window.show()
     
     sys.exit(app.exec())
