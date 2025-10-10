@@ -64,13 +64,27 @@ class VideoFileController:
     def start_trigger(self, target_fps):
         """재생 시작"""
         self.target_fps = target_fps
-        interval_ms = int(1000 / target_fps)
+        interval_ms = int(1000 / self.target_fps)
         self.timer.start(interval_ms)
-        print(f"✅ 비디오 재생 시작 ({target_fps} FPS)")
+        print(f"✅ 비디오 재생 시작 ({target_fps} FPS, interval={interval_ms}ms)")
+    
+    def _update_timer_interval(self):
+        """타이머 간격 업데이트 (실행 중)"""
+        if not self.timer.isActive():
+            return
+        
+        interval_ms = int(1000 / self.target_fps)
+        self.timer.stop()
+        self.timer.start(interval_ms)
+        print(f"⏩ 타이머 간격 업데이트: {interval_ms}ms")
     
     def stop_trigger(self):
         """재생 중지"""
-        self.timer.stop()
+        if self.timer.isActive():
+            self.timer.stop()
+            # Qt 이벤트 루프가 대기 중인 timeout 처리하도록 잠시 대기
+            from PySide6.QtCore import QCoreApplication
+            QCoreApplication.processEvents()
     
     def _read_frame(self):
         """프레임 읽기 (타이머 콜백)"""
@@ -98,7 +112,10 @@ class VideoFileController:
         self.stop_trigger()
         
         if self.cap:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception as e:
+                print(f"⚠️ 비디오 해제 실패: {e}")
             self.cap = None
     
     # 카메라 컨트롤러 호환 메서드 (더미)

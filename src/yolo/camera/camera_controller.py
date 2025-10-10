@@ -165,8 +165,10 @@ class CameraController:
     def stop_trigger(self):
         """트리거 중지"""
         self.trigger_running = False
-        if self.trigger_thread:
-            self.trigger_thread.join(timeout=1.0)
+        if self.trigger_thread and self.trigger_thread.is_alive():
+            self.trigger_thread.join(timeout=2.0)
+            if self.trigger_thread.is_alive():
+                print("⚠️ 트리거 스레드가 2초 내에 종료되지 않았습니다")
             self.trigger_thread = None
     
     def _trigger_loop(self):
@@ -216,8 +218,23 @@ class CameraController:
         self.stop_trigger()
         
         if self.hCamera:
-            if self.pFrameBuffer:
-                mvsdk.CameraAlignFree(self.pFrameBuffer)
-            mvsdk.CameraUnInit(self.hCamera)
+            try:
+                # 카메라 정지
+                mvsdk.CameraStop(self.hCamera)
+            except:
+                pass
+            
+            try:
+                if self.pFrameBuffer:
+                    mvsdk.CameraAlignFree(self.pFrameBuffer)
+                    self.pFrameBuffer = None
+            except Exception as e:
+                print(f"⚠️ 버퍼 해제 실패: {e}")
+            
+            try:
+                mvsdk.CameraUnInit(self.hCamera)
+            except Exception as e:
+                print(f"⚠️ 카메라 해제 실패: {e}")
+            
             self.hCamera = None
 
