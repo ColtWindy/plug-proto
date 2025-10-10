@@ -23,9 +23,9 @@ def load_models():
     # 모델 목록 생성
     model_list = [(f.name, str(f)) for f in engine_files]
     
-    # 첫 번째 모델 로드
+    # 첫 번째 모델 로드 (기본 task=detect)
     first_model_path = str(engine_files[0])
-    model = YOLO(first_model_path)
+    model = YOLO(first_model_path, task='detect')
     print(f"✅ 모델: {engine_files[0].name}")
     
     return model, model_list

@@ -202,6 +202,15 @@ class YOLOCameraWindow(QMainWindow):
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         layout.addWidget(self.model_combo)
         
+        # Task 선택
+        task_layout = QHBoxLayout()
+        task_layout.addWidget(QLabel("Task:"))
+        self.task_combo = QComboBox()
+        self.task_combo.addItems(['detect', 'segment', 'classify', 'pose', 'obb'])
+        self.task_combo.setCurrentText('detect')
+        task_layout.addWidget(self.task_combo)
+        layout.addLayout(task_layout)
+        
         group.setLayout(layout)
         return group
     
@@ -218,6 +227,21 @@ class YOLOCameraWindow(QMainWindow):
         
         return sorted([str(f) for f in video_files])
     
+    def _detect_task_from_name(self, model_path):
+        """파일명에서 task 추론"""
+        name = Path(model_path).stem.lower()
+        
+        if 'seg' in name or 'segment' in name:
+            return 'segment'
+        elif 'cls' in name or 'classify' in name:
+            return 'classify'
+        elif 'pose' in name:
+            return 'pose'
+        elif 'obb' in name:
+            return 'obb'
+        
+        return 'detect'  # 기본값
+    
     def init_model_combo(self):
         """모델 콤보박스 초기화"""
         for model_name, model_path in self.model_list:
@@ -228,17 +252,8 @@ class YOLOCameraWindow(QMainWindow):
         if self.is_running:
             return
         
-        # 기존 카메라 정리
-        if self.camera:
-            self.camera.cleanup()
-            self.camera = None
-        
         self.source_type = 'camera' if self.camera_radio.isChecked() else 'file'
         self.update_source_ui()
-        
-        # 카메라 모드로 전환 시 사전 초기화
-        if self.source_type == 'camera':
-            self.init_camera_early()
     
     def update_source_ui(self):
         """소스에 따른 UI 업데이트"""
@@ -257,7 +272,7 @@ class YOLOCameraWindow(QMainWindow):
             self.status_label.setText("비디오 파일 모드 - 시작 버튼을 클릭하세요")
     
     def init_camera_early(self):
-        """카메라 사전 초기화 (해상도 가져오기)"""
+        """카메라 사전 초기화 (앱 시작 시 1회만)"""
         if self.source_type != 'camera':
             return
         
@@ -265,9 +280,9 @@ class YOLOCameraWindow(QMainWindow):
             self.camera = CameraController()
             self.camera.initialize()
             self.init_camera_controls()
-            print("✅ 카메라 사전 초기화 완료")
+            print("✅ 카메라 초기화 완료")
         except Exception as e:
-            print(f"⚠️ 카메라 사전 초기화 실패: {e}")
+            print(f"⚠️ 카메라 초기화 실패: {e}")
             self.status_label.setText(f"카메라를 찾을 수 없습니다 - 파일 모드를 사용하세요")
     
     def init_camera_controls(self):
@@ -306,8 +321,14 @@ class YOLOCameraWindow(QMainWindow):
         
         model_path = self.model_combo.itemData(index)
         if model_path:
-            self.model = YOLO(model_path)
-            print(f"✅ 모델 변경: {Path(model_path).name}")
+            # 파일명에서 task 자동 추론
+            detected_task = self._detect_task_from_name(model_path)
+            self.task_combo.setCurrentText(detected_task)
+            
+            # 모델 로드
+            task = self.task_combo.currentText()
+            self.model = YOLO(model_path, task=task)
+            print(f"✅ 모델 변경: {Path(model_path).name} (task={task})")
     
     def on_resolution_changed(self, resolution):
         """해상도 변경"""
