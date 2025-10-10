@@ -22,6 +22,7 @@ class CameraControlWidget(QWidget):
     def init_ui(self):
         """UI 초기화"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         
         # 해상도
         res_group = QGroupBox("해상도")

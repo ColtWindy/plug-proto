@@ -19,13 +19,13 @@ class VideoControlWidget(QWidget):
     def init_ui(self):
         """UI 초기화"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         
         # FPS (재생 속도)
         fps_group = QGroupBox("재생 속도")
         fps_layout = QVBoxLayout()
         
         fps_control = QHBoxLayout()
-        fps_control.addWidget(QLabel("FPS:"))
         self.fps_slider = QSlider(Qt.Horizontal)
         self.fps_slider.setMinimum(1)
         self.fps_slider.setMaximum(60)
@@ -33,8 +33,8 @@ class VideoControlWidget(QWidget):
         self.fps_slider.valueChanged.connect(self._on_fps_changed)
         fps_control.addWidget(self.fps_slider)
         
-        self.fps_label = QLabel("30")
-        self.fps_label.setMinimumWidth(30)
+        self.fps_label = QLabel("30 FPS")
+        self.fps_label.setMinimumWidth(60)
         fps_control.addWidget(self.fps_label)
         fps_layout.addLayout(fps_control)
         
@@ -46,6 +46,6 @@ class VideoControlWidget(QWidget):
     
     def _on_fps_changed(self, value):
         """FPS 변경"""
-        self.fps_label.setText(f"{value}")
+        self.fps_label.setText(f"{value} FPS")
         self.fps_changed.emit(value)
 

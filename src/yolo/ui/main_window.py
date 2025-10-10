@@ -57,6 +57,9 @@ class YOLOCameraWindow(QMainWindow):
         self.init_ui()
         self.init_model_combo()
         self.update_source_ui()
+        
+        # 카메라 사전 초기화
+        self.init_camera_early()
     
     def init_ui(self):
         """UI 초기화"""
@@ -225,8 +228,17 @@ class YOLOCameraWindow(QMainWindow):
         if self.is_running:
             return
         
+        # 기존 카메라 정리
+        if self.camera:
+            self.camera.cleanup()
+            self.camera = None
+        
         self.source_type = 'camera' if self.camera_radio.isChecked() else 'file'
         self.update_source_ui()
+        
+        # 카메라 모드로 전환 시 사전 초기화
+        if self.source_type == 'camera':
+            self.init_camera_early()
     
     def update_source_ui(self):
         """소스에 따른 UI 업데이트"""
@@ -243,6 +255,20 @@ class YOLOCameraWindow(QMainWindow):
             self.status_label.setText("카메라 모드 - 시작 버튼을 클릭하세요")
         else:
             self.status_label.setText("비디오 파일 모드 - 시작 버튼을 클릭하세요")
+    
+    def init_camera_early(self):
+        """카메라 사전 초기화 (해상도 가져오기)"""
+        if self.source_type != 'camera':
+            return
+        
+        try:
+            self.camera = CameraController()
+            self.camera.initialize()
+            self.init_camera_controls()
+            print("✅ 카메라 사전 초기화 완료")
+        except Exception as e:
+            print(f"⚠️ 카메라 사전 초기화 실패: {e}")
+            self.status_label.setText(f"카메라를 찾을 수 없습니다 - 파일 모드를 사용하세요")
     
     def init_camera_controls(self):
         """카메라 컨트롤 초기화"""
@@ -423,11 +449,16 @@ class YOLOCameraWindow(QMainWindow):
         """소스 초기화 (카메라 또는 비디오)"""
         try:
             if self.source_type == 'camera':
-                self.camera = CameraController()
-                self.camera.initialize()
-                self.camera.signals.frame_ready.connect(self.on_camera_frame)
-                self.init_camera_controls()
-                print("✅ 카메라 초기화 완료")
+                # 이미 초기화된 카메라가 있으면 재사용
+                if self.camera and isinstance(self.camera, CameraController):
+                    self.camera.signals.frame_ready.connect(self.on_camera_frame)
+                    print("✅ 기존 카메라 사용")
+                else:
+                    self.camera = CameraController()
+                    self.camera.initialize()
+                    self.camera.signals.frame_ready.connect(self.on_camera_frame)
+                    self.init_camera_controls()
+                    print("✅ 카메라 초기화 완료")
             else:
                 video_path = self.video_combo.currentData()
                 if not video_path:
@@ -466,9 +497,10 @@ class YOLOCameraWindow(QMainWindow):
         # 3. 트리거 중지
         self.camera.stop_trigger()
         
-        # 4. 리소스 정리
-        self.camera.cleanup()
-        self.camera = None
+        # 4. 비디오 모드만 리소스 정리 (카메라는 유지)
+        if self.source_type == 'file':
+            self.camera.cleanup()
+            self.camera = None
         
         # 5. UI 상태
         self.start_button.setEnabled(True)
