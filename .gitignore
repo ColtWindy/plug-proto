@@ -30,5 +30,8 @@ Camera/
 *.onnx
 *.cache
 
+# YOLO models (source) - only in src/yolo/models
+src/yolo/models/*.pt
+
 # 샘플 동영상
 src/yolo/samples
