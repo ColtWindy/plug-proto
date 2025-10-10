@@ -29,3 +29,6 @@ Camera/
 *.engine
 *.onnx
 *.cache
+
+# 샘플 동영상
+src/yolo/samples
