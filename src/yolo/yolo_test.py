@@ -4,10 +4,32 @@ YOLO 카메라 애플리케이션 메인 진입점
 """
 import sys
 import os
+from pathlib import Path
 from _lib.wayland_utils import setup_wayland_environment
 from PySide6.QtWidgets import QApplication
+from ultralytics import YOLO
 from camera.camera_controller import CameraController
 from ui.main_window import YOLOCameraWindow
+
+
+def load_models():
+    """YOLO 모델 로드"""
+    models_dir = Path(__file__).parent / "models"
+    engine_files = sorted(models_dir.glob("*.engine"))
+    
+    if not engine_files:
+        print("❌ 모델 파일(.engine)을 찾을 수 없습니다")
+        return None, []
+    
+    # 모델 목록 생성
+    model_list = [(f.name, str(f)) for f in engine_files]
+    
+    # 첫 번째 모델 로드
+    first_model_path = str(engine_files[0])
+    model = YOLO(first_model_path)
+    print(f"✅ 모델: {engine_files[0].name}")
+    
+    return model, model_list
 
 
 def main():
@@ -40,8 +62,14 @@ def main():
         print(f"❌ 카메라 초기화 실패: {e}")
         sys.exit(1)
     
+    # YOLO 모델 로드
+    model, model_list = load_models()
+    if not model:
+        print("❌ YOLO 모델을 로드할 수 없습니다")
+        sys.exit(1)
+    
     # 메인 윈도우
-    window = YOLOCameraWindow(camera)
+    window = YOLOCameraWindow(camera, model, model_list)
     window.show()
     
     sys.exit(app.exec())
@@ -49,5 +77,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

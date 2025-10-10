@@ -1,13 +1,10 @@
 #coding=utf-8
 """
 YOLO 카메라 메인 윈도우
-UI 레이아웃, 디스플레이, 추론 워커 관리
+UI 레이아웃, 디스플레이
 """
-import queue
-import threading
 import time
 from pathlib import Path
-import numpy as np
 import cv2
 from ultralytics import YOLO
 from PySide6.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, 
@@ -17,79 +14,17 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap
 
 
-class InferenceWorker:
-    """비동기 YOLO 추론 워커"""
-    
-    def __init__(self, model):
-        self.model = model
-        self.running = False
-        self.thread = None
-        self.input_queue = queue.Queue(maxsize=2)
-        self.output_queue = queue.Queue(maxsize=2)
-    
-    def start(self):
-        """워커 시작"""
-        self.running = True
-        self.thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self.thread.start()
-    
-    def stop(self):
-        """워커 종료"""
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=1.0)
-    
-    def submit(self, frame_bgr):
-        """추론 요청 (넘치면 드롭)"""
-        try:
-            self.input_queue.put_nowait(frame_bgr)
-        except queue.Full:
-            pass
-    
-    def get_result(self):
-        """추론 결과 가져오기 (non-blocking)"""
-        try:
-            return self.output_queue.get_nowait()
-        except queue.Empty:
-            return None
-    
-    def _worker_loop(self):
-        """워커 루프"""
-        while self.running:
-            try:
-                frame_bgr = self.input_queue.get(timeout=0.1)
-                
-                # YOLO 추론
-                start_time = time.time()
-                results = self.model(frame_bgr, verbose=False)
-                infer_time = (time.time() - start_time) * 1000
-                
-                # 결과 렌더링
-                annotated_frame = results[0].plot()
-                detected_count = len(results[0].boxes)
-                
-                # 결과 큐에 넣기
-                try:
-                    self.output_queue.put_nowait((annotated_frame, infer_time, detected_count))
-                except queue.Full:
-                    pass
-            except queue.Empty:
-                continue
-
-
 class YOLOCameraWindow(QMainWindow):
     """YOLO 카메라 윈도우"""
     
-    def __init__(self, camera_controller):
+    def __init__(self, camera_controller, model, model_list):
         super().__init__()
         self.camera = camera_controller
+        self.model = model
+        self.model_list = model_list
         
         self.setWindowTitle("YOLO Inference - MindVision Camera")
         self.setGeometry(100, 100, 1280, 720)
-        
-        # YOLO 모델
-        self.model = None
-        self.inference_worker = None
         
         # 상태
         self.is_running = False
@@ -113,12 +48,8 @@ class YOLOCameraWindow(QMainWindow):
         # UI 초기화
         self.init_ui()
         
-        # 타이머 설정
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_display)
-        
         # 초기화
-        self.init_yolo()
+        self.init_model_combo()
         self.init_camera_controls()
         
         # 카메라 시그널 연결
@@ -240,29 +171,10 @@ class YOLOCameraWindow(QMainWindow):
         
         return control_group
     
-    def init_yolo(self):
-        """YOLO 모델 초기화"""
-        try:
-            models_dir = Path(__file__).parent / "models"
-            engine_files = sorted(models_dir.glob("*.engine"))
-            
-            if not engine_files:
-                self.status_label.setText("모델 파일(.engine)을 찾을 수 없습니다")
-                self.start_button.setEnabled(False)
-                return
-            
-            for model_file in engine_files:
-                self.model_combo.addItem(model_file.name, str(model_file))
-            
-            # 첫 번째 모델 로드
-            first_model = str(engine_files[0])
-            self.model = YOLO(first_model)
-            print(f"✅ 모델: {engine_files[0].name}")
-            
-        except Exception as e:
-            print(f"❌ 모델 로드 실패: {e}")
-            self.status_label.setText(f"모델 로드 실패: {e}")
-            self.start_button.setEnabled(False)
+    def init_model_combo(self):
+        """모델 콤보박스 초기화"""
+        for model_name, model_path in self.model_list:
+            self.model_combo.addItem(model_name, model_path)
     
     def init_camera_controls(self):
         """카메라 컨트롤 초기화"""
@@ -309,13 +221,13 @@ class YOLOCameraWindow(QMainWindow):
     
     def on_model_changed(self, index):
         """모델 변경"""
-        if index < 0:
+        if index < 0 or self.is_running:
             return
         
         model_path = self.model_combo.itemData(index)
         if model_path:
             self.model = YOLO(model_path)
-            print(f"✅ 모델: {Path(model_path).name}")
+            print(f"✅ 모델 변경: {Path(model_path).name}")
     
     def on_resolution_changed(self, index):
         """해상도 변경"""
@@ -359,8 +271,8 @@ class YOLOCameraWindow(QMainWindow):
         self.gain_label.setText(f"{value}")
     
     def on_camera_frame(self, frame_bgr):
-        """카메라 프레임 콜백"""
-        if not self.is_running or self.inference_worker is None:
+        """카메라 프레임 콜백 + 추론 + 디스플레이"""
+        if not self.is_running:
             return
         
         # 프레임 크기
@@ -375,20 +287,15 @@ class YOLOCameraWindow(QMainWindow):
             self.fps_start_time = time.time()
             self.fps_frame_count = 0
         
-        # 추론 제출
-        self.inference_worker.submit(frame_bgr)
-    
-    def update_display(self):
-        """디스플레이 업데이트"""
-        if not self.is_running:
-            return
+        # YOLO 추론
+        start_time = time.time()
+        results = self.model(frame_bgr, verbose=False)
+        infer_time = (time.time() - start_time) * 1000
         
-        # 추론 결과
-        result = self.inference_worker.get_result()
-        if result is None:
-            return
+        # 결과 렌더링
+        annotated_frame = results[0].plot()
+        detected_count = len(results[0].boxes)
         
-        annotated_frame, infer_time, detected_count = result
         self.last_infer_time = infer_time
         
         # 평균 추론 시간
@@ -446,15 +353,8 @@ class YOLOCameraWindow(QMainWindow):
         self.infer_times = []
         self.avg_infer_time = 0.0
         
-        # 추론 워커 시작
-        self.inference_worker = InferenceWorker(self.model)
-        self.inference_worker.start()
-        
         # 카메라 트리거 시작
         self.camera.start_trigger(self.camera.target_fps)
-        
-        # UI 업데이트 타이머
-        self.update_timer.start(16)
         
         # UI 상태
         self.start_button.setEnabled(False)
@@ -469,13 +369,7 @@ class YOLOCameraWindow(QMainWindow):
         """캡처 중지"""
         self.is_running = False
         self.camera.is_running = False
-        
-        self.update_timer.stop()
         self.camera.stop_trigger()
-        
-        if self.inference_worker:
-            self.inference_worker.stop()
-            self.inference_worker = None
         
         # UI 상태
         self.start_button.setEnabled(True)
@@ -494,9 +388,6 @@ class YOLOCameraWindow(QMainWindow):
         """윈도우 종료"""
         if self.is_running:
             self.stop_capture()
-        
-        if self.update_timer.isActive():
-            self.update_timer.stop()
         
         self.camera.cleanup()
         event.accept()
