@@ -14,7 +14,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from camera.camera_controller import CameraController
 from camera.video_file_controller import VideoFileController
-from .widgets import CameraControlWidget, VideoControlWidget
+from ui.widgets.camera_control_widget import CameraControlWidget
+from ui.widgets.video_control_widget import VideoControlWidget
 
 
 class YOLOCameraWindow(QMainWindow):
