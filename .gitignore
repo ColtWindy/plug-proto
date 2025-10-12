@@ -35,3 +35,6 @@ src/yolo/models/*.pt
 
 # 샘플 동영상
 src/yolo/samples
+
+# ultralytics
+mobileclip_blt.ts
