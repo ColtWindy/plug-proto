@@ -6,6 +6,8 @@ Jetson Nano Super용 PySide6 카메라 동기화 프로젝트
 
 Mindvision GigE 카메라와 디스플레이 VSync를 정밀하게 동기화하여 프레임 드랍 없는 영상 표시를 구현합니다.
 
+📊 **[프로젝트 진행 현황 보기](PROGRESS.md)** - 완료된 작업, 기술적 성과, 향후 계획
+
 ## 프로젝트 구조
 
 ```
@@ -206,4 +208,7 @@ nvstart-weston.sh
 ```bash
 sudo apt install -y libxcb-cursor0
 ```
+
+### Roboflow 사용 튜토리얼
+https://youtu.be/VhlnPiSAKzc?si=4xfgJjHDnFko9jz1
 

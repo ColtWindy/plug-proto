@@ -53,6 +53,10 @@ class YOLOCameraWindow(QMainWindow):
         # 비디오 파일 목록
         self.video_files = self._scan_video_files()
         
+        # YOLOE 프롬프트 설정 (.pt 파일만)
+        if model_list and self._is_yoloe_model(model_list[0][1]) and self._is_pt_file(model_list[0][1]):
+            self._setup_yoloe(["car"])
+        
         # UI 초기화
         self.init_ui()
         self.init_model_combo()
@@ -242,6 +246,34 @@ class YOLOCameraWindow(QMainWindow):
         
         return 'detect'  # 기본값
     
+    def _is_yoloe_model(self, model_path):
+        """YOLOE 모델 감지"""
+        return "yoloe" in Path(model_path).stem.lower()
+    
+    def _is_pt_file(self, model_path):
+        """PyTorch 모델 파일인지 확인"""
+        return Path(model_path).suffix.lower() == '.pt'
+    
+    def _setup_yoloe(self, classes):
+        """YOLOE 프롬프트 설정"""
+        try:
+            # YOLO 객체 타입 확인
+            if not hasattr(self.model, 'set_classes'):
+                print(f"⚠️ 모델에 set_classes 메서드가 없습니다 (타입: {type(self.model)})")
+                return
+            
+            if not hasattr(self.model, 'get_text_pe'):
+                print(f"⚠️ 모델에 get_text_pe 메서드가 없습니다 - YOLOE 모델이 아닐 수 있습니다")
+                return
+                
+            text_embeddings = self.model.get_text_pe(classes)
+            self.model.set_classes(classes, text_embeddings)
+            print(f"✅ YOLOE 프롬프트: {', '.join(classes)}")
+        except Exception as e:
+            print(f"⚠️ YOLOE 프롬프트 설정 실패: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def init_model_combo(self):
         """모델 콤보박스 초기화"""
         for model_name, model_path in self.model_list:
@@ -321,14 +353,25 @@ class YOLOCameraWindow(QMainWindow):
         
         model_path = self.model_combo.itemData(index)
         if model_path:
-            # 파일명에서 task 자동 추론
-            detected_task = self._detect_task_from_name(model_path)
-            self.task_combo.setCurrentText(detected_task)
-            
-            # 모델 로드
-            task = self.task_combo.currentText()
-            self.model = YOLO(model_path, task=task)
-            print(f"✅ 모델 변경: {Path(model_path).name} (task={task})")
+            # YOLOE 모델 처리
+            if self._is_yoloe_model(model_path):
+                self.model = YOLO(model_path)  # task 자동 감지
+                
+                # .pt 파일만 프롬프트 지원
+                if self._is_pt_file(model_path):
+                    self._setup_yoloe(["car"])
+                    print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE + prompt)")
+                else:
+                    print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE prompt-free)")
+                    print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다")
+            else:
+                # 일반 YOLO 모델
+                detected_task = self._detect_task_from_name(model_path)
+                self.task_combo.setCurrentText(detected_task)
+                
+                task = self.task_combo.currentText()
+                self.model = YOLO(model_path, task=task)
+                print(f"✅ 모델 변경: {Path(model_path).name} (task={task})")
     
     def on_resolution_changed(self, resolution):
         """해상도 변경"""
