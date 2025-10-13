@@ -14,6 +14,7 @@ from ui.widgets.camera_control_widget import CameraControlWidget
 from ui.widgets.video_control_widget import VideoControlWidget
 from ui.model_manager import ModelManager
 from ui.inference_engine import InferenceEngine
+from ui.inference_worker import InferenceWorker
 
 
 class YOLOCameraWindow(QMainWindow):
@@ -30,10 +31,18 @@ class YOLOCameraWindow(QMainWindow):
         self.model_manager = model_manager
         self.inference_engine = InferenceEngine(model_manager.current_model)
         
+        # 추론 워커 (백그라운드 스레드)
+        self.inference_worker = InferenceWorker(self.inference_engine)
+        self.inference_worker.result_ready.connect(self._on_inference_result)
+        
         # 소스 관리
         self.source = None
         self.source_type = 'camera'
         self.is_running = False
+        
+        # 프레임 통계
+        self.skipped_frames = 0
+        self.processed_frames = 0
         
         # 비디오 파일 목록
         self.video_files = self._scan_video_files()
@@ -352,12 +361,37 @@ class YOLOCameraWindow(QMainWindow):
             self.source.set_gain(value)
     
     def _on_frame_ready(self, frame_bgr):
-        """프레임 콜백 - 추론 및 디스플레이"""
+        """
+        프레임 콜백 - 워커 스레드에 프레임 전달 (메인 스레드 블로킹 없음)
+        
+        Note: 워커가 추론 중이면 이전 프레임을 덮어씀 (항상 최신 프레임 유지)
+        """
         if not self.is_running:
             return
         
-        # 추론 수행
-        q_image, stats = self.inference_engine.process_frame(frame_bgr)
+        # 워커가 추론 중이면 프레임 스킵
+        if self.inference_worker.processing:
+            self.skipped_frames += 1
+            return
+        
+        # 워커에 프레임 제출 (비동기)
+        self.processed_frames += 1
+        self.inference_worker.submit_frame(frame_bgr)
+    
+    def _on_inference_result(self, q_image, stats):
+        """
+        추론 결과 콜백 (워커 스레드에서 발생, 메인 스레드에서 실행)
+        
+        Args:
+            q_image: 시각화된 QImage
+            stats: 통계 딕셔너리
+        """
+        if not self.is_running:
+            return
+        
+        # 프레임 스킵 정보 추가
+        stats['skipped_frames'] = self.skipped_frames
+        stats['processed_frames'] = self.processed_frames
         
         # 디스플레이
         self._display_frame(q_image)
@@ -382,6 +416,12 @@ class YOLOCameraWindow(QMainWindow):
                 f"(평균: {stats['avg_infer_time']:.1f}ms) | "
                 f"탐지: {stats['detected_count']} | "
                 f"해상도: {stats['frame_width']}x{stats['frame_height']}")
+        
+        # 프레임 스킵 정보 (스킵이 있을 때만 표시)
+        if stats.get('skipped_frames', 0) > 0:
+            skip_rate = stats['skipped_frames'] / (stats['processed_frames'] + stats['skipped_frames']) * 100
+            text += f" | ⚠️ 스킵: {stats['skipped_frames']}개 ({skip_rate:.1f}%)"
+        
         self.status_label.setText(text)
     
     def _on_start(self):
@@ -393,8 +433,14 @@ class YOLOCameraWindow(QMainWindow):
         # 상태 초기화
         self.is_running = True
         self.source.is_running = True
+        self.skipped_frames = 0
+        self.processed_frames = 0
         self.inference_engine.reset_stats()
         self._pixmap_cache = None
+        
+        # 워커 스레드 시작
+        if not self.inference_worker.isRunning():
+            self.inference_worker.start()
         
         # FPS 설정
         target_fps = (self.camera_widget.fps_slider.value() if self.source_type == 'camera' 
@@ -491,6 +537,10 @@ class YOLOCameraWindow(QMainWindow):
         """윈도우 종료"""
         if self.is_running:
             self._on_stop()
+        
+        # 워커 스레드 종료
+        if self.inference_worker.isRunning():
+            self.inference_worker.stop()
         
         if self.source:
             self.source.cleanup()

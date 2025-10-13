@@ -80,7 +80,12 @@ class InferenceEngine:
         self.avg_infer_time = 0.0
     
     def _update_fps(self):
-        """FPS 계산"""
+        """
+        FPS 계산 (실제 처리된 프레임 기준)
+        
+        Note: 추론 시간이 길면 프레임이 스킵되므로 FPS가 낮아질 수 있음
+              예: 추론 100ms → 최대 10 FPS
+        """
         self.fps_frame_count += 1
         elapsed = time.time() - self.fps_start_time
         
