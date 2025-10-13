@@ -212,3 +212,10 @@ sudo apt install -y libxcb-cursor0
 ### Roboflow 사용 튜토리얼
 https://youtu.be/VhlnPiSAKzc?si=4xfgJjHDnFko9jz1
 
+### 공개 모델 Weights
+- 기본: https://github.com/boss4848/waste-detection
+- 재질 감지: https://github.com/teamsmcorg/Waste-Classification-using-YOLOv8
+- https://huggingface.co/turhancan97/yolov8-segment-trash-detection?utm_source=chatgpt.com
+- 국내 AI 모델 1(성능 확인불가, 모델 v6): https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71362
+- 국내 AI 모델 2(성능 확인불가, 모델 v4): https://aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&aihubDataSe=data&dataSetSn=140
+
