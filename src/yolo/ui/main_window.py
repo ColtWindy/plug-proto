@@ -1,158 +1,131 @@
 #coding=utf-8
 """
 YOLO 카메라 메인 윈도우
-UI 레이아웃, 디스플레이
+UI 레이아웃 및 이벤트 처리만 담당
 """
-import time
 from pathlib import Path
-import cv2
-from ultralytics import YOLO
 from PySide6.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, 
                                 QPushButton, QHBoxLayout, QSizePolicy, QComboBox, 
                                 QGroupBox, QRadioButton, QButtonGroup, QStackedWidget)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPixmap
 from camera.camera_controller import CameraController
 from camera.video_file_controller import VideoFileController
 from ui.widgets.camera_control_widget import CameraControlWidget
 from ui.widgets.video_control_widget import VideoControlWidget
+from ui.model_manager import ModelManager
+from ui.inference_engine import InferenceEngine
 
 
 class YOLOCameraWindow(QMainWindow):
-    """YOLO 카메라 윈도우"""
+    """YOLO 카메라 윈도우 - UI 및 이벤트 처리"""
     
-    def __init__(self, model, model_list):
+    def __init__(self, model_manager):
+        """
+        Args:
+            model_manager: ModelManager 인스턴스
+        """
         super().__init__()
-        self.model = model
-        self.model_list = model_list
-        self.camera = None
+        
+        # 모델 관리
+        self.model_manager = model_manager
+        self.inference_engine = InferenceEngine(model_manager.current_model)
+        
+        # 소스 관리
+        self.source = None
         self.source_type = 'camera'
-        
-        self.setWindowTitle("YOLO Inference")
-        self.setGeometry(100, 100, 1280, 720)
-        
-        # 상태
         self.is_running = False
-        self.frame_width = 0
-        self.frame_height = 0
-        
-        # FPS 계산
-        self.fps_start_time = time.time()
-        self.fps_frame_count = 0
-        self.current_fps = 0.0
-        
-        # 추론 통계
-        self.last_infer_time = 0.0
-        self.infer_times = []
-        self.avg_infer_time = 0.0
-        
-        # 스케일 캐시
-        self._scaled_cache = None
-        self._cache_key = None
         
         # 비디오 파일 목록
         self.video_files = self._scan_video_files()
         
-        # YOLOE 프롬프트 설정 (.pt 파일 중 prompt-free가 아닌 것만)
-        if (model_list and self._is_yoloe_model(model_list[0][1]) and 
-            self._is_pt_file(model_list[0][1]) and 
-            not self._is_prompt_free_model(model_list[0][1])):
-            self._setup_yoloe(["car"])
+        # 디스플레이 캐시
+        self._pixmap_cache = None
         
         # UI 초기화
-        self.init_ui()
-        self.init_model_combo()
-        self.update_source_ui()
+        self.setWindowTitle("YOLO Inference")
+        self.setGeometry(100, 100, 1280, 720)
+        self._init_ui()
+        self._init_model_combo()
+        self._update_source_ui()
         
         # 카메라 사전 초기화
-        self.init_camera_early()
+        self._init_camera_early()
     
-    def init_ui(self):
+    def _init_ui(self):
         """UI 초기화"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         main_layout = QHBoxLayout()
         
-        # 왼쪽: 비디오
-        video_layout = QVBoxLayout()
-        
-        self.video_label = QLabel()
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black;")
-        self.video_label.setMinimumSize(640, 480)
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        video_layout.addWidget(self.video_label, stretch=1)
-        
-        self.status_label = QLabel("초기화 중...")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        video_layout.addWidget(self.status_label)
-        
+        # 왼쪽: 비디오 디스플레이
+        video_layout = self._create_video_layout()
         main_layout.addLayout(video_layout, stretch=3)
         
-        # 오른쪽: 컨트롤
+        # 오른쪽: 컨트롤 패널
         control_panel = self._create_control_panel()
         main_layout.addWidget(control_panel, stretch=1)
         
         central_widget.setLayout(main_layout)
     
+    def _create_video_layout(self):
+        """비디오 디스플레이 레이아웃"""
+        layout = QVBoxLayout()
+        
+        # 비디오 라벨
+        self.video_label = QLabel()
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.video_label, stretch=1)
+        
+        # 상태 라벨
+        self.status_label = QLabel("초기화 중...")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+        
+        return layout
+    
     def _create_control_panel(self):
-        """컨트롤 패널 생성"""
+        """컨트롤 패널"""
         panel = QWidget()
         panel.setMaximumWidth(320)
         layout = QVBoxLayout()
         layout.setSpacing(10)
         
-        # 제어 버튼 (상단)
-        button_group = self._create_button_group()
-        layout.addWidget(button_group)
+        # 제어 버튼
+        layout.addWidget(self._create_control_buttons())
         
-        # 소스 선택
-        source_group = self._create_source_group()
-        layout.addWidget(source_group)
+        # 소스 선택 (카메라/파일)
+        layout.addWidget(self._create_source_selector())
         
-        # 비디오 파일 선택 (파일 모드일 때만 표시)
-        self.video_file_group = self._create_video_file_group()
+        # 비디오 파일 선택 (파일 모드에서만 표시)
+        self.video_file_group = self._create_video_file_selector()
         layout.addWidget(self.video_file_group)
         
         # 모델 선택
-        model_group = self._create_model_group()
-        layout.addWidget(model_group)
+        layout.addWidget(self._create_model_selector())
         
         # 카메라/비디오 설정 위젯 (동적 교체)
-        self.control_stack = QStackedWidget()
+        layout.addWidget(self._create_settings_stack())
         
-        # 카메라 위젯
-        self.camera_widget = CameraControlWidget()
-        self.camera_widget.resolution_changed.connect(self.on_resolution_changed)
-        self.camera_widget.fps_changed.connect(self.on_fps_changed)
-        self.camera_widget.exposure_changed.connect(self.on_exposure_changed)
-        self.camera_widget.gain_changed.connect(self.on_gain_changed)
-        self.control_stack.addWidget(self.camera_widget)
-        
-        # 비디오 위젯 (재생 속도만)
-        self.video_widget = VideoControlWidget(self.video_files)
-        self.video_widget.fps_changed.connect(self.on_fps_changed)
-        self.control_stack.addWidget(self.video_widget)
-        
-        layout.addWidget(self.control_stack)
         layout.addStretch()
-        
         panel.setLayout(layout)
         return panel
     
-    def _create_button_group(self):
+    def _create_control_buttons(self):
         """제어 버튼 그룹"""
         group = QGroupBox("제어")
         layout = QHBoxLayout()
         
         self.start_button = QPushButton("▶ 시작")
-        self.start_button.clicked.connect(self.start_capture)
+        self.start_button.clicked.connect(self._on_start)
         self.start_button.setMinimumHeight(40)
         layout.addWidget(self.start_button)
         
         self.stop_button = QPushButton("⏸ 중지")
-        self.stop_button.clicked.connect(self.stop_capture)
+        self.stop_button.clicked.connect(self._on_stop)
         self.stop_button.setEnabled(False)
         self.stop_button.setMinimumHeight(40)
         layout.addWidget(self.stop_button)
@@ -165,8 +138,8 @@ class YOLOCameraWindow(QMainWindow):
         group.setLayout(layout)
         return group
     
-    def _create_source_group(self):
-        """소스 선택 그룹"""
+    def _create_source_selector(self):
+        """입력 소스 선택"""
         group = QGroupBox("입력 소스")
         layout = QHBoxLayout()
         
@@ -177,16 +150,15 @@ class YOLOCameraWindow(QMainWindow):
         
         self.source_button_group.addButton(self.camera_radio)
         self.source_button_group.addButton(self.file_radio)
-        self.camera_radio.toggled.connect(self.on_source_changed)
+        self.camera_radio.toggled.connect(self._on_source_changed)
         
         layout.addWidget(self.camera_radio)
         layout.addWidget(self.file_radio)
-        
         group.setLayout(layout)
         return group
     
-    def _create_video_file_group(self):
-        """비디오 파일 선택 그룹"""
+    def _create_video_file_selector(self):
+        """비디오 파일 선택"""
         group = QGroupBox("비디오 파일")
         layout = QVBoxLayout()
         
@@ -199,13 +171,13 @@ class YOLOCameraWindow(QMainWindow):
         group.setLayout(layout)
         return group
     
-    def _create_model_group(self):
-        """모델 선택 그룹"""
+    def _create_model_selector(self):
+        """모델 선택"""
         group = QGroupBox("YOLO 모델")
         layout = QVBoxLayout()
         
         self.model_combo = QComboBox()
-        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         layout.addWidget(self.model_combo)
         
         # Task 선택
@@ -220,117 +192,65 @@ class YOLOCameraWindow(QMainWindow):
         group.setLayout(layout)
         return group
     
+    def _create_settings_stack(self):
+        """설정 위젯 스택 (카메라/비디오 전환)"""
+        self.control_stack = QStackedWidget()
+        
+        # 카메라 위젯
+        self.camera_widget = CameraControlWidget()
+        self.camera_widget.resolution_changed.connect(self._on_resolution_changed)
+        self.camera_widget.fps_changed.connect(self._on_fps_changed)
+        self.camera_widget.exposure_changed.connect(self._on_exposure_changed)
+        self.camera_widget.gain_changed.connect(self._on_gain_changed)
+        self.control_stack.addWidget(self.camera_widget)
+        
+        # 비디오 위젯
+        self.video_widget = VideoControlWidget(self.video_files)
+        self.video_widget.fps_changed.connect(self._on_fps_changed)
+        self.control_stack.addWidget(self.video_widget)
+        
+        return self.control_stack
+    
+    def _init_model_combo(self):
+        """모델 콤보박스 초기화"""
+        for model_name, model_path in self.model_manager.model_list:
+            self.model_combo.addItem(model_name, model_path)
+    
     def _scan_video_files(self):
         """비디오 파일 스캔"""
         samples_dir = Path(__file__).parent.parent / "samples"
         if not samples_dir.exists():
             return []
         
-        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
+        extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
         video_files = []
-        for ext in video_extensions:
+        for ext in extensions:
             video_files.extend(samples_dir.glob(f"*{ext}"))
         
         return sorted([str(f) for f in video_files])
     
-    def _detect_task_from_name(self, model_path):
-        """파일명에서 task 추론"""
-        name = Path(model_path).stem.lower()
-        
-        if 'seg' in name or 'segment' in name:
-            return 'segment'
-        elif 'cls' in name or 'classify' in name:
-            return 'classify'
-        elif 'pose' in name:
-            return 'pose'
-        elif 'obb' in name:
-            return 'obb'
-        
-        return 'detect'  # 기본값
-    
-    def _is_yoloe_model(self, model_path):
-        """YOLOE 모델 감지"""
-        return "yoloe" in Path(model_path).stem.lower()
-    
-    def _is_pt_file(self, model_path):
-        """PyTorch 모델 파일인지 확인"""
-        return Path(model_path).suffix.lower() == '.pt'
-    
-    def _is_prompt_free_model(self, model_path):
-        """Prompt-free 모델인지 확인 (파일명에 '-pf' 포함)"""
-        return '-pf' in Path(model_path).stem.lower()
-    
-    def _setup_yoloe(self, classes):
-        """YOLOE 프롬프트 설정"""
-        try:
-            # YOLO 객체 타입 확인
-            if not hasattr(self.model, 'set_classes'):
-                print(f"⚠️ 모델에 set_classes 메서드가 없습니다 (타입: {type(self.model)})")
-                return
-            
-            if not hasattr(self.model, 'get_text_pe'):
-                print(f"⚠️ 모델에 get_text_pe 메서드가 없습니다 - YOLOE 모델이 아닐 수 있습니다")
-                return
-                
-            text_embeddings = self.model.get_text_pe(classes)
-            self.model.set_classes(classes, text_embeddings)
-            print(f"✅ YOLOE 프롬프트: {', '.join(classes)}")
-        except Exception as e:
-            print(f"⚠️ YOLOE 프롬프트 설정 실패: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def init_model_combo(self):
-        """모델 콤보박스 초기화"""
-        for model_name, model_path in self.model_list:
-            self.model_combo.addItem(model_name, model_path)
-    
-    def on_source_changed(self):
-        """소스 변경"""
-        if self.is_running:
-            return
-        
-        self.source_type = 'camera' if self.camera_radio.isChecked() else 'file'
-        self.update_source_ui()
-    
-    def update_source_ui(self):
-        """소스에 따른 UI 업데이트"""
-        is_camera = self.source_type == 'camera'
-        
-        # 비디오 파일 선택 표시/숨김
-        self.video_file_group.setVisible(not is_camera)
-        
-        # 위젯 전환 (0: 카메라, 1: 비디오)
-        self.control_stack.setCurrentIndex(0 if is_camera else 1)
-        
-        # 상태 메시지
-        if is_camera:
-            self.status_label.setText("카메라 모드 - 시작 버튼을 클릭하세요")
-        else:
-            self.status_label.setText("비디오 파일 모드 - 시작 버튼을 클릭하세요")
-    
-    def init_camera_early(self):
-        """카메라 사전 초기화 (앱 시작 시 1회만)"""
+    def _init_camera_early(self):
+        """카메라 사전 초기화 (앱 시작 시)"""
         if self.source_type != 'camera':
             return
         
         try:
-            self.camera = CameraController()
-            self.camera.initialize()
-            self.init_camera_controls()
+            self.source = CameraController()
+            self.source.initialize()
+            self._setup_camera_controls()
             print("✅ 카메라 초기화 완료")
         except Exception as e:
             print(f"⚠️ 카메라 초기화 실패: {e}")
-            self.status_label.setText(f"카메라를 찾을 수 없습니다 - 파일 모드를 사용하세요")
+            self.status_label.setText("카메라를 찾을 수 없습니다 - 파일 모드를 사용하세요")
     
-    def init_camera_controls(self):
+    def _setup_camera_controls(self):
         """카메라 컨트롤 초기화"""
-        if not self.camera or self.source_type != 'camera':
+        if not self.source or self.source_type != 'camera':
             return
         
         try:
             # 해상도
-            resolutions, current_index = self.camera.get_resolutions()
+            resolutions, current_index = self.source.get_resolutions()
             self.camera_widget.setup_resolution(resolutions, current_index)
             
             # 노출 시간
@@ -338,151 +258,133 @@ class YOLOCameraWindow(QMainWindow):
             max_exposure_ms = int(1000 / target_fps * 0.8)
             current_exposure = max_exposure_ms // 2
             self.camera_widget.setup_exposure(1, max_exposure_ms, current_exposure)
-            
-            # 수동 노출 설정
-            self.camera.set_manual_exposure(current_exposure)
+            self.source.set_manual_exposure(current_exposure)
             print(f"✅ 수동 노출: {current_exposure}ms")
             
             # 게인
-            gain_min, gain_max = self.camera.get_gain_range()
-            current_gain = self.camera.get_current_gain()
+            gain_min, gain_max = self.source.get_gain_range()
+            current_gain = self.source.get_current_gain()
             self.camera_widget.setup_gain(gain_min, gain_max, current_gain)
             
         except Exception as e:
             print(f"❌ 컨트롤 초기화 실패: {e}")
             self.status_label.setText(f"컨트롤 초기화 실패: {e}")
     
-    def on_model_changed(self, index):
+    # ========== 이벤트 핸들러 ==========
+    
+    def _on_source_changed(self):
+        """소스 변경 (카메라 ↔ 파일)"""
+        if self.is_running:
+            return
+        
+        self.source_type = 'camera' if self.camera_radio.isChecked() else 'file'
+        self._update_source_ui()
+    
+    def _update_source_ui(self):
+        """소스에 따른 UI 업데이트"""
+        is_camera = self.source_type == 'camera'
+        
+        # 비디오 파일 선택 표시/숨김
+        self.video_file_group.setVisible(not is_camera)
+        
+        # 설정 위젯 전환 (0: 카메라, 1: 비디오)
+        self.control_stack.setCurrentIndex(0 if is_camera else 1)
+        
+        # 상태 메시지
+        mode = "카메라" if is_camera else "비디오 파일"
+        self.status_label.setText(f"{mode} 모드 - 시작 버튼을 클릭하세요")
+    
+    def _on_model_changed(self, index):
         """모델 변경"""
         if index < 0 or self.is_running:
             return
         
         model_path = self.model_combo.itemData(index)
-        if model_path:
-            # YOLOE 모델 처리
-            if self._is_yoloe_model(model_path):
-                self.model = YOLO(model_path)  # task 자동 감지
-                
-                # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
-                if self._is_pt_file(model_path) and not self._is_prompt_free_model(model_path):
-                    self._setup_yoloe(["car"])
-                    print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE + prompt)")
-                else:
-                    if self._is_prompt_free_model(model_path):
-                        print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE prompt-free)")
-                        print("ℹ️ Prompt-free 모델은 고정 vocabulary로 작동합니다")
-                    else:
-                        print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE prompt-free)")
-                        print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다")
-            else:
-                # 일반 YOLO 모델
-                detected_task = self._detect_task_from_name(model_path)
-                self.task_combo.setCurrentText(detected_task)
-                
-                task = self.task_combo.currentText()
-                self.model = YOLO(model_path, task=task)
-                print(f"✅ 모델 변경: {Path(model_path).name} (task={task})")
-    
-    def on_resolution_changed(self, resolution):
-        """해상도 변경"""
-        if self.is_running or not self.camera:
+        if not model_path:
             return
         
-        self.camera.set_resolution(resolution)
-        self.frame_width = 0
-        self.frame_height = 0
-    
-    def on_fps_changed(self, fps):
-        """FPS 변경"""
-        # 실행 중이면 타겟 FPS 업데이트
-        if self.camera and self.is_running:
-            self.camera.target_fps = fps
-            # 비디오 모드면 타이머 간격도 업데이트
-            if self.source_type == 'file' and hasattr(self.camera, '_update_timer_interval'):
-                self.camera._update_timer_interval()
-            print(f"🔄 FPS 변경: {fps}")
+        # 모델 전환
+        task = self.task_combo.currentText() if not self.model_manager._is_yoloe_model(model_path) else None
+        new_model = self.model_manager.switch_model(model_path, task)
         
-        # 카메라 모드일 때만 최대 노출 시간 업데이트
+        # 추론 엔진 업데이트
+        self.inference_engine.model = new_model
+        
+        # Task 콤보박스 업데이트 (일반 YOLO)
+        if not self.model_manager._is_yoloe_model(model_path):
+            detected_task = self.model_manager._detect_task(model_path)
+            self.task_combo.setCurrentText(detected_task)
+        
+        print(f"✅ 모델 변경: {Path(model_path).name}")
+    
+    def _on_resolution_changed(self, resolution):
+        """해상도 변경"""
+        if self.is_running or not self.source:
+            return
+        
+        self.source.set_resolution(resolution)
+    
+    def _on_fps_changed(self, fps):
+        """FPS 변경"""
+        if not self.source or not self.is_running:
+            return
+        
+        self.source.target_fps = fps
+        
+        # 비디오 모드면 타이머 간격도 업데이트
+        if self.source_type == 'file' and hasattr(self.source, '_update_timer_interval'):
+            self.source._update_timer_interval()
+        
+        # 카메라 모드면 최대 노출 시간 업데이트
         if self.source_type == 'camera':
             self.camera_widget.update_max_exposure(fps)
+        
+        print(f"🔄 FPS 변경: {fps}")
     
-    def on_exposure_changed(self, value_ms):
+    def _on_exposure_changed(self, value_ms):
         """노출 시간 변경"""
-        if self.camera:
-            self.camera.set_exposure(value_ms)
+        if self.source:
+            self.source.set_exposure(value_ms)
     
-    def on_gain_changed(self, value):
+    def _on_gain_changed(self, value):
         """게인 변경"""
-        if self.camera:
-            self.camera.set_gain(value)
+        if self.source:
+            self.source.set_gain(value)
     
-    def on_camera_frame(self, frame_bgr):
-        """카메라 프레임 콜백 + 추론 + 디스플레이"""
+    def _on_frame_ready(self, frame_bgr):
+        """프레임 콜백 - 추론 및 디스플레이"""
         if not self.is_running:
             return
         
-        # 프레임 크기
-        if self.frame_width == 0 or self.frame_height == 0:
-            self.frame_height, self.frame_width = frame_bgr.shape[:2]
+        # 추론 수행
+        q_image, stats = self.inference_engine.process_frame(frame_bgr)
         
-        # FPS 계산
-        self.fps_frame_count += 1
-        elapsed_time = time.time() - self.fps_start_time
-        if elapsed_time >= 1.0:
-            self.current_fps = self.fps_frame_count / elapsed_time
-            self.fps_start_time = time.time()
-            self.fps_frame_count = 0
-        
-        # YOLO 추론
-        start_time = time.time()
-        results = self.model(frame_bgr, verbose=False)
-        infer_time = (time.time() - start_time) * 1000
-        
-        # 결과 렌더링
-        annotated_frame = results[0].plot()
-        detected_count = len(results[0].boxes)
-        
-        self.last_infer_time = infer_time
-        
-        # 평균 추론 시간
-        self.infer_times.append(infer_time)
-        if len(self.infer_times) > 30:
-            self.infer_times.pop(0)
-        self.avg_infer_time = sum(self.infer_times) / len(self.infer_times)
-        
-        # BGR → RGB
-        annotated_frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        
-        # QImage 변환
-        height, width, channel = annotated_frame_rgb.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(annotated_frame_rgb.data, width, height, 
-                        bytes_per_line, QImage.Format_RGB888).copy()
-        
-        # QPixmap 스케일링 (캐시 사용)
-        pixmap = QPixmap.fromImage(q_image)
-        label_size = self.video_label.size()
-        cache_key = (label_size.width(), label_size.height(), pixmap.cacheKey())
-        
-        if cache_key != self._cache_key:
-            self._scaled_cache = pixmap.scaled(label_size, Qt.KeepAspectRatio, 
-                                              Qt.FastTransformation)
-            self._cache_key = cache_key
-        
-        self.video_label.setPixmap(self._scaled_cache)
+        # 디스플레이
+        self._display_frame(q_image)
         
         # 상태 표시
-        status_text = (f"FPS: {self.current_fps:.1f} | "
-                      f"추론: {self.last_infer_time:.1f}ms "
-                      f"(평균: {self.avg_infer_time:.1f}ms) | "
-                      f"탐지: {detected_count}")
-        
-        if self.frame_width > 0 and self.frame_height > 0:
-            status_text += f" | 해상도: {self.frame_width}x{self.frame_height}"
-        
-        self.status_label.setText(status_text)
+        self._update_status_label(stats)
     
-    def start_capture(self):
+    def _display_frame(self, q_image):
+        """프레임 디스플레이 (캐시 사용)"""
+        label_size = self.video_label.size()
+        scaled_pixmap, cache_key = InferenceEngine.scale_pixmap(
+            q_image, label_size, self._pixmap_cache
+        )
+        
+        self._pixmap_cache = (cache_key, scaled_pixmap)
+        self.video_label.setPixmap(scaled_pixmap)
+    
+    def _update_status_label(self, stats):
+        """상태 라벨 업데이트"""
+        text = (f"FPS: {stats['fps']:.1f} | "
+                f"추론: {stats['infer_time']:.1f}ms "
+                f"(평균: {stats['avg_infer_time']:.1f}ms) | "
+                f"탐지: {stats['detected_count']} | "
+                f"해상도: {stats['frame_width']}x{stats['frame_height']}")
+        self.status_label.setText(text)
+    
+    def _on_start(self):
         """캡처 시작"""
         # 소스 초기화
         if not self._init_source():
@@ -490,59 +392,48 @@ class YOLOCameraWindow(QMainWindow):
         
         # 상태 초기화
         self.is_running = True
-        self.camera.is_running = True
-        self.fps_start_time = time.time()
-        self.fps_frame_count = 0
-        self._scaled_cache = None
-        self.frame_width = 0
-        self.frame_height = 0
-        self.infer_times = []
-        self.avg_infer_time = 0.0
+        self.source.is_running = True
+        self.inference_engine.reset_stats()
+        self._pixmap_cache = None
         
-        # 카메라/비디오 시작
-        if self.source_type == 'camera':
-            target_fps = self.camera_widget.fps_slider.value()
-        else:
-            target_fps = self.video_widget.fps_slider.value()
+        # FPS 설정
+        target_fps = (self.camera_widget.fps_slider.value() if self.source_type == 'camera' 
+                      else self.video_widget.fps_slider.value())
         
-        self.camera.start_trigger(target_fps)
+        # 소스 시작
+        self.source.start_trigger(target_fps)
         
-        # UI 상태
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.model_combo.setEnabled(False)
-        self.camera_radio.setEnabled(False)
-        self.file_radio.setEnabled(False)
+        # UI 업데이트
+        self._set_ui_running(True)
         
-        status = "실시간 객체 탐지 중..." if self.source_type == 'camera' else "비디오 분석 중..."
-        self.status_label.setText(status)
-        
+        mode = "실시간 객체 탐지" if self.source_type == 'camera' else "비디오 분석"
+        self.status_label.setText(f"{mode} 중...")
         print(f"\n🎬 시작 (타겟 FPS: {target_fps})")
     
     def _init_source(self):
         """소스 초기화 (카메라 또는 비디오)"""
         try:
             if self.source_type == 'camera':
-                # 이미 초기화된 카메라가 있으면 재사용
-                if self.camera and isinstance(self.camera, CameraController):
-                    self.camera.signals.frame_ready.connect(self.on_camera_frame)
+                # 이미 초기화된 카메라 재사용
+                if self.source and isinstance(self.source, CameraController):
+                    self.source.signals.frame_ready.connect(self._on_frame_ready)
                     print("✅ 기존 카메라 사용")
                 else:
-                    self.camera = CameraController()
-                    self.camera.initialize()
-                    self.camera.signals.frame_ready.connect(self.on_camera_frame)
-                    self.init_camera_controls()
+                    self.source = CameraController()
+                    self.source.initialize()
+                    self.source.signals.frame_ready.connect(self._on_frame_ready)
+                    self._setup_camera_controls()
                     print("✅ 카메라 초기화 완료")
             else:
+                # 비디오 파일
                 video_path = self.video_combo.currentData()
                 if not video_path:
                     self.status_label.setText("비디오 파일을 선택하세요")
                     return False
                 
-                self.camera = VideoFileController(video_path)
-                self.camera.initialize()
-                self.camera.signals.frame_ready.connect(self.on_camera_frame)
-                
+                self.source = VideoFileController(video_path)
+                self.source.initialize()
+                self.source.signals.frame_ready.connect(self._on_frame_ready)
                 print(f"✅ 비디오 초기화 완료: {Path(video_path).name}")
             
             return True
@@ -553,52 +444,55 @@ class YOLOCameraWindow(QMainWindow):
             self.status_label.setText(f"{source_name} 초기화 실패: {e}")
             return False
     
-    def stop_capture(self):
+    def _on_stop(self):
         """캡처 중지"""
-        if not self.camera:
+        if not self.source:
             return
         
-        # 1. 프레임 처리 중지
+        # 상태 변경
         self.is_running = False
-        self.camera.is_running = False
+        self.source.is_running = False
         
-        # 2. 시그널 연결 해제 (중요!)
+        # 시그널 연결 해제
         try:
-            self.camera.signals.frame_ready.disconnect(self.on_camera_frame)
+            self.source.signals.frame_ready.disconnect(self._on_frame_ready)
         except:
             pass
         
-        # 3. 트리거 중지
-        self.camera.stop_trigger()
+        # 소스 중지
+        self.source.stop_trigger()
         
-        # 4. 비디오 모드만 리소스 정리 (카메라는 유지)
+        # 비디오 모드만 리소스 정리 (카메라는 유지)
         if self.source_type == 'file':
-            self.camera.cleanup()
-            self.camera = None
+            self.source.cleanup()
+            self.source = None
         
-        # 5. UI 상태
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.model_combo.setEnabled(True)
-        self.camera_radio.setEnabled(True)
-        self.file_radio.setEnabled(True)
+        # UI 업데이트
+        self._set_ui_running(False)
         self.status_label.setText("중지됨")
-        
         print("✅ 중지 완료")
+    
+    def _set_ui_running(self, running):
+        """UI 실행 상태 설정"""
+        self.start_button.setEnabled(not running)
+        self.stop_button.setEnabled(running)
+        self.model_combo.setEnabled(not running)
+        self.camera_radio.setEnabled(not running)
+        self.file_radio.setEnabled(not running)
+    
+    # ========== Qt 이벤트 ==========
     
     def resizeEvent(self, event):
         """윈도우 크기 변경"""
         super().resizeEvent(event)
-        self._scaled_cache = None
-        self._cache_key = None
+        self._pixmap_cache = None
     
     def closeEvent(self, event):
         """윈도우 종료"""
         if self.is_running:
-            self.stop_capture()
+            self._on_stop()
         
-        if self.camera:
-            self.camera.cleanup()
+        if self.source:
+            self.source.cleanup()
         
         event.accept()
-

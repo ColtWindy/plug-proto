@@ -7,103 +7,8 @@ import os
 from pathlib import Path
 from _lib.wayland_utils import setup_wayland_environment
 from PySide6.QtWidgets import QApplication
-from ultralytics import YOLO
 from ui.main_window import YOLOCameraWindow
-
-
-def load_models():
-    """YOLO 모델 로드"""
-    models_dir = Path(__file__).parent / "models"
-    
-    # .pt와 .engine 파일 검색 (.pt 우선)
-    pt_files = sorted(models_dir.glob("*.pt"))
-    engine_files = sorted(models_dir.glob("*.engine"))
-    all_models = pt_files + engine_files  # .pt 파일 우선
-    
-    if not all_models:
-        print("❌ 모델 파일(.engine/.pt)을 찾을 수 없습니다")
-        return None, []
-    
-    # 모델 목록 생성
-    model_list = [(f.name, str(f)) for f in all_models]
-    
-    print(f"📦 발견된 모델: {len(all_models)}개")
-    print(f"  .pt 파일: {len(pt_files)}개, .engine 파일: {len(engine_files)}개")
-    
-    # 첫 번째 모델 로드
-    first_model_path = str(all_models[0])
-    
-    # YOLOE 모델 처리
-    if _is_yoloe_model(first_model_path):
-        model = YOLO(first_model_path)  # task 자동 감지
-        
-        # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
-        if _is_pt_file(first_model_path) and not _is_prompt_free_model(first_model_path):
-            _setup_yoloe(model, ["car"])
-        else:
-            if _is_prompt_free_model(first_model_path):
-                print("ℹ️ Prompt-free 모델은 고정 vocabulary로 작동합니다")
-            else:
-                print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다 (고정 vocabulary)")
-    else:
-        # 일반 YOLO 모델
-        task = _detect_task_from_name(first_model_path)
-        model = YOLO(first_model_path, task=task)
-    
-    print(f"✅ 모델: {all_models[0].name}")
-    return model, model_list
-
-
-def _detect_task_from_name(model_path):
-    """파일명에서 task 추론"""
-    name = Path(model_path).stem.lower()
-    
-    if 'seg' in name or 'segment' in name:
-        return 'segment'
-    elif 'cls' in name or 'classify' in name:
-        return 'classify'
-    elif 'pose' in name:
-        return 'pose'
-    elif 'obb' in name:
-        return 'obb'
-    
-    return 'detect'
-
-
-def _is_yoloe_model(model_path):
-    """YOLOE 모델 감지"""
-    return "yoloe" in Path(model_path).stem.lower()
-
-
-def _is_pt_file(model_path):
-    """PyTorch 모델 파일인지 확인"""
-    return Path(model_path).suffix.lower() == '.pt'
-
-
-def _is_prompt_free_model(model_path):
-    """Prompt-free 모델인지 확인 (파일명에 '-pf' 포함)"""
-    return '-pf' in Path(model_path).stem.lower()
-
-
-def _setup_yoloe(model, classes):
-    """YOLOE 프롬프트 설정"""
-    try:
-        # YOLO 객체 타입 확인
-        if not hasattr(model, 'set_classes'):
-            print(f"⚠️ 모델에 set_classes 메서드가 없습니다 (타입: {type(model)})")
-            return
-        
-        if not hasattr(model, 'get_text_pe'):
-            print(f"⚠️ 모델에 get_text_pe 메서드가 없습니다 - YOLOE 모델이 아닐 수 있습니다")
-            return
-            
-        text_embeddings = model.get_text_pe(classes)
-        model.set_classes(classes, text_embeddings)
-        print(f"✅ YOLOE 프롬프트: {', '.join(classes)}")
-    except Exception as e:
-        print(f"⚠️ YOLOE 프롬프트 설정 실패: {e}")
-        import traceback
-        traceback.print_exc()
+from ui.model_manager import ModelManager
 
 
 def main():
@@ -128,14 +33,17 @@ def main():
     app = QApplication(sys.argv)
     print(f"📱 Qt 플랫폼: {app.platformName()}")
     
-    # YOLO 모델 로드
-    model, model_list = load_models()
+    # 모델 관리자 생성 및 로드
+    models_dir = Path(__file__).parent / "models"
+    model_manager = ModelManager(models_dir)
+    
+    model, model_list = model_manager.load_models()
     if not model:
         print("❌ YOLO 모델을 로드할 수 없습니다")
         sys.exit(1)
     
     # 메인 윈도우
-    window = YOLOCameraWindow(model, model_list)
+    window = YOLOCameraWindow(model_manager)
     window.show()
     
     sys.exit(app.exec())
