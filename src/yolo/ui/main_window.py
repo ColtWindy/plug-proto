@@ -53,8 +53,10 @@ class YOLOCameraWindow(QMainWindow):
         # 비디오 파일 목록
         self.video_files = self._scan_video_files()
         
-        # YOLOE 프롬프트 설정 (.pt 파일만)
-        if model_list and self._is_yoloe_model(model_list[0][1]) and self._is_pt_file(model_list[0][1]):
+        # YOLOE 프롬프트 설정 (.pt 파일 중 prompt-free가 아닌 것만)
+        if (model_list and self._is_yoloe_model(model_list[0][1]) and 
+            self._is_pt_file(model_list[0][1]) and 
+            not self._is_prompt_free_model(model_list[0][1])):
             self._setup_yoloe(["car"])
         
         # UI 초기화
@@ -254,6 +256,10 @@ class YOLOCameraWindow(QMainWindow):
         """PyTorch 모델 파일인지 확인"""
         return Path(model_path).suffix.lower() == '.pt'
     
+    def _is_prompt_free_model(self, model_path):
+        """Prompt-free 모델인지 확인 (파일명에 '-pf' 포함)"""
+        return '-pf' in Path(model_path).stem.lower()
+    
     def _setup_yoloe(self, classes):
         """YOLOE 프롬프트 설정"""
         try:
@@ -357,13 +363,17 @@ class YOLOCameraWindow(QMainWindow):
             if self._is_yoloe_model(model_path):
                 self.model = YOLO(model_path)  # task 자동 감지
                 
-                # .pt 파일만 프롬프트 지원
-                if self._is_pt_file(model_path):
+                # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
+                if self._is_pt_file(model_path) and not self._is_prompt_free_model(model_path):
                     self._setup_yoloe(["car"])
                     print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE + prompt)")
                 else:
-                    print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE prompt-free)")
-                    print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다")
+                    if self._is_prompt_free_model(model_path):
+                        print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE prompt-free)")
+                        print("ℹ️ Prompt-free 모델은 고정 vocabulary로 작동합니다")
+                    else:
+                        print(f"✅ 모델 변경: {Path(model_path).name} (YOLOE prompt-free)")
+                        print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다")
             else:
                 # 일반 YOLO 모델
                 detected_task = self._detect_task_from_name(model_path)

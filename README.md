@@ -164,7 +164,7 @@ sudo nvpmodel -m 2 && sudo jetson_clocks
   - Orin Nano Super: 모드 2 = 15W (모든 CPU/GPU 코어 활성화)
   - 다른 모드는 전력 절약을 위해 성능 제한
 - `jetson_clocks`: 모든 CPU, GPU 클럭을 최대 주파수로 고정
-  - 기본 상태는 동적 클럭 조정 (DVFS) → 성능 변동
+  - 기본 상태는 동적 클럭 조정 (DVFS) → 성능 변동`
   - 고정 클럭 → 일관된 최고 성능
 
 **성능 차이 (YOLO 추론 기준)**:

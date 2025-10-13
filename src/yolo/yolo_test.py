@@ -37,11 +37,14 @@ def load_models():
     if _is_yoloe_model(first_model_path):
         model = YOLO(first_model_path)  # task 자동 감지
         
-        # .pt 파일만 프롬프트 지원
-        if _is_pt_file(first_model_path):
+        # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
+        if _is_pt_file(first_model_path) and not _is_prompt_free_model(first_model_path):
             _setup_yoloe(model, ["car"])
         else:
-            print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다 (고정 vocabulary)")
+            if _is_prompt_free_model(first_model_path):
+                print("ℹ️ Prompt-free 모델은 고정 vocabulary로 작동합니다")
+            else:
+                print("ℹ️ TensorRT 엔진은 prompt-free 모드로 작동합니다 (고정 vocabulary)")
     else:
         # 일반 YOLO 모델
         task = _detect_task_from_name(first_model_path)
@@ -75,6 +78,11 @@ def _is_yoloe_model(model_path):
 def _is_pt_file(model_path):
     """PyTorch 모델 파일인지 확인"""
     return Path(model_path).suffix.lower() == '.pt'
+
+
+def _is_prompt_free_model(model_path):
+    """Prompt-free 모델인지 확인 (파일명에 '-pf' 포함)"""
+    return '-pf' in Path(model_path).stem.lower()
 
 
 def _setup_yoloe(model, classes):
