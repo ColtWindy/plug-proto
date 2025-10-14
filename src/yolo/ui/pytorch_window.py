@@ -13,8 +13,10 @@ from camera.camera_controller import CameraController
 from camera.video_file_controller import VideoFileController
 from ui.widgets.camera_control_widget import CameraControlWidget
 from ui.widgets.video_control_widget import VideoControlWidget
+from ui.widgets.inference_config_widget import InferenceConfigWidget
 from inference.engine import InferenceEngine
 from inference.worker import InferenceWorker
+from inference.config import PTConfig
 
 
 class PyTorchWindow(QMainWindow):
@@ -24,9 +26,11 @@ class PyTorchWindow(QMainWindow):
         super().__init__()
         
         self.model_manager = model_manager
+        self.inference_config = PTConfig()
         self.inference_engine = InferenceEngine(
             model_manager.current_model,
-            model_manager.model_list[0][1] if model_manager.model_list else None
+            model_manager.model_list[0][1] if model_manager.model_list else None,
+            self.inference_config
         )
         
         self.inference_worker = InferenceWorker(self.inference_engine)
@@ -93,6 +97,11 @@ class PyTorchWindow(QMainWindow):
         
         # 모델 선택
         layout.addWidget(self._create_model_selector())
+        
+        # 추론 설정
+        self.inference_config_widget = InferenceConfigWidget(self.inference_config)
+        self.inference_config_widget.config_changed.connect(self._on_inference_config_changed)
+        layout.addWidget(self.inference_config_widget)
         
         # 카메라/비디오 설정
         self.control_stack = QStackedWidget()
@@ -351,6 +360,13 @@ class PyTorchWindow(QMainWindow):
         self.source.target_fps = fps
         if hasattr(self.source, '_update_timer_interval'):
             self.source._update_timer_interval()
+    
+    def _on_inference_config_changed(self, config):
+        """추론 설정 변경"""
+        self.inference_config = config
+        self.inference_engine.config = config
+        print(f"✅ 추론 설정: conf={config.conf:.2f}, iou={config.iou:.2f}, "
+              f"imgsz={config.imgsz}, max_det={config.max_det}, augment={config.augment}")
     
     def _on_frame_ready(self, frame_bgr):
         """프레임 콜백"""

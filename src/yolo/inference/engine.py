@@ -12,15 +12,17 @@ from PySide6.QtCore import Qt
 class InferenceEngine:
     """YOLO 추론 및 통계 관리"""
     
-    def __init__(self, model, model_path=None):
+    def __init__(self, model, model_path=None, config=None):
         """
         Args:
             model: YOLO 모델 객체
             model_path: 모델 파일 경로 (확장자 확인용)
+            config: EngineConfig 또는 PTConfig 객체
         """
         self.model = model
         self.model_path = model_path
         self.is_engine = model_path and model_path.endswith('.engine') if model_path else False
+        self.config = config
         
         # FPS 계산
         self.fps_start_time = time.time()
@@ -45,9 +47,12 @@ class InferenceEngine:
         # FPS 업데이트
         self._update_fps()
         
-        # YOLO 추론
+        # YOLO 추론 (config 파라미터 적용)
         start_time = time.time()
-        results = self.model(frame_bgr, verbose=False)
+        if self.config:
+            results = self.model(frame_bgr, **self.config.to_dict())
+        else:
+            results = self.model(frame_bgr, verbose=False)
         infer_time = (time.time() - start_time) * 1000  # ms
         
         # 추론 시간 통계
