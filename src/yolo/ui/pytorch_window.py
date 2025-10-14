@@ -13,8 +13,8 @@ from camera.camera_controller import CameraController
 from camera.video_file_controller import VideoFileController
 from ui.widgets.camera_control_widget import CameraControlWidget
 from ui.widgets.video_control_widget import VideoControlWidget
-from ui.inference_engine import InferenceEngine
-from ui.inference_worker import InferenceWorker
+from inference.engine import InferenceEngine
+from inference.worker import InferenceWorker
 
 
 class PyTorchWindow(QMainWindow):

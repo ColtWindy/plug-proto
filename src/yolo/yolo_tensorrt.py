@@ -9,7 +9,7 @@ from pathlib import Path
 from _lib.wayland_utils import setup_wayland_environment
 from PySide6.QtWidgets import QApplication
 from ui.tensorrt_window import TensorRTWindow
-from ui.model_manager import ModelManager
+from inference.model_manager import ModelManager
 
 
 def main():

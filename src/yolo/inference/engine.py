@@ -55,10 +55,8 @@ class InferenceEngine:
         
         # 결과 처리
         if self.is_engine:
-            # TensorRT 엔진
             result = results if not isinstance(results, list) else results[0]
         else:
-            # PyTorch 모델
             result = results[0] if isinstance(results, list) else results
         
         # 결과 렌더링
@@ -91,12 +89,7 @@ class InferenceEngine:
         self.avg_infer_time = 0.0
     
     def _update_fps(self):
-        """
-        FPS 계산 (실제 처리된 프레임 기준)
-        
-        Note: 추론 시간이 길면 프레임이 스킵되므로 FPS가 낮아질 수 있음
-              예: 추론 100ms → 최대 10 FPS
-        """
+        """FPS 계산"""
         self.fps_frame_count += 1
         elapsed = time.time() - self.fps_start_time
         
@@ -110,7 +103,6 @@ class InferenceEngine:
         self.last_infer_time = infer_time
         self.infer_times.append(infer_time)
         
-        # 최근 30프레임 평균
         if len(self.infer_times) > 30:
             self.infer_times.pop(0)
         
@@ -126,25 +118,14 @@ class InferenceEngine:
     
     @staticmethod
     def scale_pixmap(q_image, label_size, cache=None):
-        """
-        QImage를 레이블 크기에 맞게 스케일링 (캐시 지원)
-        
-        Args:
-            q_image: 입력 QImage
-            label_size: 레이블 크기 (QSize)
-            cache: (cache_key, cached_pixmap) 튜플 또는 None
-        
-        Returns:
-            (scaled_pixmap, cache_key): 스케일된 Pixmap과 새 캐시 키
-        """
+        """QImage를 레이블 크기에 맞게 스케일링"""
         pixmap = QPixmap.fromImage(q_image)
         cache_key = (label_size.width(), label_size.height(), pixmap.cacheKey())
         
-        # 캐시 히트 체크
         if cache and cache[0] == cache_key:
             return cache[1], cache_key
         
-        # 새로 스케일링
         scaled = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.FastTransformation)
         return scaled, cache_key
+
 
