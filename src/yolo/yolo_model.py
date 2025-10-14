@@ -1,7 +1,7 @@
 #coding=utf-8
 """
-YOLO 통합 테스트
-모든 모델 (.pt + .engine) 로드
+YOLO PyTorch 모델 테스트
+.pt 파일만 로드
 """
 import sys
 import os
@@ -13,7 +13,7 @@ from ui.model_manager import ModelManager
 
 
 def main():
-    """통합 테스트"""
+    """PyTorch 모델 테스트"""
     # Wayland 환경 설정
     wayland_display, xdg_runtime_dir = setup_wayland_environment()
     if not wayland_display:
@@ -31,24 +31,22 @@ def main():
     app = QApplication(sys.argv)
     print(f"📱 Qt 플랫폼: {app.platformName()}")
     
-    # 모델 디렉토리에서 모든 모델 검색
+    # 모델 디렉토리에서 .pt 파일만 검색
     models_dir = Path(__file__).parent / "models"
     pt_files = sorted(models_dir.glob("*.pt"))
-    engine_files = sorted(models_dir.glob("*.engine"))
-    all_models = pt_files + engine_files
     
-    if not all_models:
-        print("❌ 모델 파일이 없습니다")
+    if not pt_files:
+        print("❌ .pt 파일이 없습니다")
         sys.exit(1)
     
-    print(f"📦 발견된 모델: {len(all_models)}개 (.pt: {len(pt_files)}, .engine: {len(engine_files)})")
+    print(f"📦 PyTorch 모델: {len(pt_files)}개")
     
     # 모델 관리자 설정
     model_manager = ModelManager(models_dir)
-    model_manager.model_list = [(f.name, str(f)) for f in all_models]
-    model_manager.current_model = model_manager._load_single_model(str(all_models[0]))
+    model_manager.model_list = [(f.name, str(f)) for f in pt_files]
+    model_manager.current_model = model_manager._load_single_model(str(pt_files[0]))
     
-    print(f"✅ 첫 번째 모델: {all_models[0].name}")
+    print(f"✅ 첫 번째 모델: {pt_files[0].name}")
     
     # 메인 윈도우 실행
     window = YOLOCameraWindow(model_manager)
