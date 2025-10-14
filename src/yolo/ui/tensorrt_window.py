@@ -306,9 +306,10 @@ class TensorRTWindow(QMainWindow):
             self.status_label.setText(f"컨트롤 초기화 실패: {e}")
     
     def _on_source_changed(self):
-        """소스 변경"""
+        """소스 변경 (재생 중이면 자동 중지)"""
+        # 재생/일시정지 중이면 먼저 중지
         if self.is_running or self.is_paused:
-            return
+            self._on_stop()
         
         self.source_type = 'camera' if self.camera_radio.isChecked() else 'file'
         self._update_source_ui()
@@ -590,6 +591,8 @@ class TensorRTWindow(QMainWindow):
         if not self.source:
             return
         
+        was_running = self.is_running or self.is_paused
+        
         self.is_running = False
         self.is_paused = False
         self.source.is_running = False
@@ -618,7 +621,8 @@ class TensorRTWindow(QMainWindow):
         
         self.video_label.clear()
         self.status_label.setText("중지됨")
-        print("⏹ 중지")
+        if was_running:
+            print("⏹ 중지")
     
     
     def resizeEvent(self, event):
