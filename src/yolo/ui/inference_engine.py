@@ -12,12 +12,15 @@ from PySide6.QtCore import Qt
 class InferenceEngine:
     """YOLO 추론 및 통계 관리"""
     
-    def __init__(self, model):
+    def __init__(self, model, model_path=None):
         """
         Args:
             model: YOLO 모델 객체
+            model_path: 모델 파일 경로 (확장자 확인용)
         """
         self.model = model
+        self.model_path = model_path
+        self.is_engine = model_path and model_path.endswith('.engine') if model_path else False
         
         # FPS 계산
         self.fps_start_time = time.time()
@@ -50,9 +53,17 @@ class InferenceEngine:
         # 추론 시간 통계
         self._update_infer_stats(infer_time)
         
+        # 결과 처리
+        if self.is_engine:
+            # TensorRT 엔진
+            result = results if not isinstance(results, list) else results[0]
+        else:
+            # PyTorch 모델
+            result = results[0] if isinstance(results, list) else results
+        
         # 결과 렌더링
-        annotated_frame = results[0].plot()
-        detected_count = len(results[0].boxes)
+        annotated_frame = result.plot()
+        detected_count = len(result.boxes) if hasattr(result, 'boxes') else 0
         
         # BGR → RGB → QImage
         frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)

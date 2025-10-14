@@ -73,6 +73,7 @@ class ModelManager:
             로드된 YOLO 모델
         """
         model_path = str(model_path)
+        is_engine = model_path.endswith('.engine')
         
         # YOLOE 모델 처리
         if self._is_yoloe_model(model_path):
@@ -89,8 +90,10 @@ class ModelManager:
             # 일반 YOLO 모델
             if task is None:
                 task = self._detect_task(model_path)
+            
             model = YOLO(model_path, task=task)
-            print(f"ℹ️ YOLO (task={task})")
+            model_type = "TensorRT" if is_engine else "PyTorch"
+            print(f"✅ {model_type} 모델 (task={task})")
         
         return model
     
@@ -133,6 +136,21 @@ class ModelManager:
         """파일명에서 task 추론"""
         name = Path(model_path).stem.lower()
         
+        # .engine 파일은 기본적으로 detect로 가정 (파일명만으로 정확히 알 수 없음)
+        if model_path.endswith('.engine'):
+            # 파일명에 명확한 키워드가 있는 경우만 감지
+            if 'segment' in name or name.endswith('seg'):
+                return 'segment'
+            elif 'classify' in name or name.endswith('cls'):
+                return 'classify'
+            elif 'pose' in name:
+                return 'pose'
+            elif 'obb' in name:
+                return 'obb'
+            # 기본값: detect
+            return 'detect'
+        
+        # .pt 파일은 좀 더 유연하게 감지
         if 'seg' in name or 'segment' in name:
             return 'segment'
         elif 'cls' in name or 'classify' in name:

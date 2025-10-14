@@ -29,7 +29,9 @@ class YOLOCameraWindow(QMainWindow):
         
         # 모델 관리
         self.model_manager = model_manager
-        self.inference_engine = InferenceEngine(model_manager.current_model)
+        # 초기 모델 경로 가져오기
+        initial_model_path = model_manager.model_list[0][1] if model_manager.model_list else None
+        self.inference_engine = InferenceEngine(model_manager.current_model, initial_model_path)
         
         # 추론 워커 (백그라운드 스레드)
         self.inference_worker = InferenceWorker(self.inference_engine)
@@ -39,10 +41,6 @@ class YOLOCameraWindow(QMainWindow):
         self.source = None
         self.source_type = 'camera'
         self.is_running = False
-        
-        # 프레임 통계
-        self.skipped_frames = 0
-        self.processed_frames = 0
         
         # 비디오 파일 목록
         self.video_files = self._scan_video_files()
@@ -208,9 +206,6 @@ class YOLOCameraWindow(QMainWindow):
         # 카메라 위젯
         self.camera_widget = CameraControlWidget()
         self.camera_widget.resolution_changed.connect(self._on_resolution_changed)
-        self.camera_widget.fps_changed.connect(self._on_fps_changed)
-        self.camera_widget.exposure_changed.connect(self._on_exposure_changed)
-        self.camera_widget.gain_changed.connect(self._on_gain_changed)
         self.control_stack.addWidget(self.camera_widget)
         
         # 비디오 위젯
@@ -253,7 +248,7 @@ class YOLOCameraWindow(QMainWindow):
             self.status_label.setText("카메라를 찾을 수 없습니다 - 파일 모드를 사용하세요")
     
     def _setup_camera_controls(self):
-        """카메라 컨트롤 초기화"""
+        """카메라 컨트롤 초기화 (해상도만)"""
         if not self.source or self.source_type != 'camera':
             return
         
@@ -261,19 +256,7 @@ class YOLOCameraWindow(QMainWindow):
             # 해상도
             resolutions, current_index = self.source.get_resolutions()
             self.camera_widget.setup_resolution(resolutions, current_index)
-            
-            # 노출 시간
-            target_fps = 30
-            max_exposure_ms = int(1000 / target_fps * 0.8)
-            current_exposure = max_exposure_ms // 2
-            self.camera_widget.setup_exposure(1, max_exposure_ms, current_exposure)
-            self.source.set_manual_exposure(current_exposure)
-            print(f"✅ 수동 노출: {current_exposure}ms")
-            
-            # 게인
-            gain_min, gain_max = self.source.get_gain_range()
-            current_gain = self.source.get_current_gain()
-            self.camera_widget.setup_gain(gain_min, gain_max, current_gain)
+            print("✅ 카메라 컨트롤 초기화 완료 (자동 노출 모드)")
             
         except Exception as e:
             print(f"❌ 컨트롤 초기화 실패: {e}")
@@ -312,17 +295,31 @@ class YOLOCameraWindow(QMainWindow):
         if not model_path:
             return
         
+        is_engine = model_path.endswith('.engine')
+        
+        # Task 설정
+        if is_engine and not self.model_manager._is_yoloe_model(model_path):
+            # .engine 파일: Task 자동 감지 후 고정
+            detected_task = self.model_manager._detect_task(model_path)
+            self.task_combo.setCurrentText(detected_task)
+            self.task_combo.setEnabled(False)
+            task = detected_task
+        elif not self.model_manager._is_yoloe_model(model_path):
+            # 일반 모델: Task 변경 가능
+            self.task_combo.setEnabled(True)
+            detected_task = self.model_manager._detect_task(model_path)
+            self.task_combo.setCurrentText(detected_task)
+            task = self.task_combo.currentText()
+        else:
+            task = None
+        
         # 모델 전환
-        task = self.task_combo.currentText() if not self.model_manager._is_yoloe_model(model_path) else None
         new_model = self.model_manager.switch_model(model_path, task)
         
         # 추론 엔진 업데이트
         self.inference_engine.model = new_model
-        
-        # Task 콤보박스 업데이트 (일반 YOLO)
-        if not self.model_manager._is_yoloe_model(model_path):
-            detected_task = self.model_manager._detect_task(model_path)
-            self.task_combo.setCurrentText(detected_task)
+        self.inference_engine.model_path = model_path
+        self.inference_engine.is_engine = is_engine
         
         print(f"✅ 모델 변경: {Path(model_path).name}")
     
@@ -334,48 +331,32 @@ class YOLOCameraWindow(QMainWindow):
         self.source.set_resolution(resolution)
     
     def _on_fps_changed(self, fps):
-        """FPS 변경"""
-        if not self.source or not self.is_running:
+        """FPS 변경 (비디오 파일 전용)"""
+        if not self.source or not self.is_running or self.source_type != 'file':
             return
         
         self.source.target_fps = fps
         
-        # 비디오 모드면 타이머 간격도 업데이트
-        if self.source_type == 'file' and hasattr(self.source, '_update_timer_interval'):
+        # 타이머 간격 업데이트
+        if hasattr(self.source, '_update_timer_interval'):
             self.source._update_timer_interval()
-        
-        # 카메라 모드면 최대 노출 시간 업데이트
-        if self.source_type == 'camera':
-            self.camera_widget.update_max_exposure(fps)
         
         print(f"🔄 FPS 변경: {fps}")
     
-    def _on_exposure_changed(self, value_ms):
-        """노출 시간 변경"""
-        if self.source:
-            self.source.set_exposure(value_ms)
-    
-    def _on_gain_changed(self, value):
-        """게인 변경"""
-        if self.source:
-            self.source.set_gain(value)
-    
     def _on_frame_ready(self, frame_bgr):
         """
-        프레임 콜백 - 워커 스레드에 프레임 전달 (메인 스레드 블로킹 없음)
+        프레임 콜백 - 워커 스레드에 프레임 전달
         
-        Note: 워커가 추론 중이면 이전 프레임을 덮어씀 (항상 최신 프레임 유지)
+        Note: 워커가 추론 중이면 프레임을 건너뜀 (항상 최신 프레임 유지)
         """
         if not self.is_running:
             return
         
-        # 워커가 추론 중이면 프레임 스킵
+        # 워커가 추론 중이면 프레임 건너뜀
         if self.inference_worker.processing:
-            self.skipped_frames += 1
             return
         
         # 워커에 프레임 제출 (비동기)
-        self.processed_frames += 1
         self.inference_worker.submit_frame(frame_bgr)
     
     def _on_inference_result(self, q_image, stats):
@@ -388,10 +369,6 @@ class YOLOCameraWindow(QMainWindow):
         """
         if not self.is_running:
             return
-        
-        # 프레임 스킵 정보 추가
-        stats['skipped_frames'] = self.skipped_frames
-        stats['processed_frames'] = self.processed_frames
         
         # 디스플레이
         self._display_frame(q_image)
@@ -417,11 +394,6 @@ class YOLOCameraWindow(QMainWindow):
                 f"탐지: {stats['detected_count']} | "
                 f"해상도: {stats['frame_width']}x{stats['frame_height']}")
         
-        # 프레임 스킵 정보 (스킵이 있을 때만 표시)
-        if stats.get('skipped_frames', 0) > 0:
-            skip_rate = stats['skipped_frames'] / (stats['processed_frames'] + stats['skipped_frames']) * 100
-            text += f" | ⚠️ 스킵: {stats['skipped_frames']}개 ({skip_rate:.1f}%)"
-        
         self.status_label.setText(text)
     
     def _on_start(self):
@@ -433,8 +405,6 @@ class YOLOCameraWindow(QMainWindow):
         # 상태 초기화
         self.is_running = True
         self.source.is_running = True
-        self.skipped_frames = 0
-        self.processed_frames = 0
         self.inference_engine.reset_stats()
         self._pixmap_cache = None
         
@@ -442,19 +412,20 @@ class YOLOCameraWindow(QMainWindow):
         if not self.inference_worker.isRunning():
             self.inference_worker.start()
         
-        # FPS 설정
-        target_fps = (self.camera_widget.fps_slider.value() if self.source_type == 'camera' 
-                      else self.video_widget.fps_slider.value())
-        
         # 소스 시작
-        self.source.start_trigger(target_fps)
+        if self.source_type == 'camera':
+            self.source.start_trigger()
+            print("\n🎬 카메라 시작 (최대 속도)")
+        else:
+            target_fps = self.video_widget.fps_slider.value()
+            self.source.start_trigger(target_fps)
+            print(f"\n🎬 비디오 시작 (타겟 FPS: {target_fps})")
         
         # UI 업데이트
         self._set_ui_running(True)
         
         mode = "실시간 객체 탐지" if self.source_type == 'camera' else "비디오 분석"
         self.status_label.setText(f"{mode} 중...")
-        print(f"\n🎬 시작 (타겟 FPS: {target_fps})")
     
     def _init_source(self):
         """소스 초기화 (카메라 또는 비디오)"""
