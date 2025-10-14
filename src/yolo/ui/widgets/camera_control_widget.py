@@ -1,13 +1,13 @@
 #coding=utf-8
 """
-카메라 제어 위젯 - 자동 노출 모드
+카메라 제어 위젯
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QGroupBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QGroupBox
 from PySide6.QtCore import Signal
 
 
 class CameraControlWidget(QWidget):
-    """카메라 전용 제어 위젯 (자동 노출)"""
+    """카메라 전용 제어 위젯"""
     
     # 시그널
     resolution_changed = Signal(object)
@@ -17,7 +17,7 @@ class CameraControlWidget(QWidget):
         self.init_ui()
     
     def init_ui(self):
-        """UI 초기화 (자동 노출 모드)"""
+        """UI 초기화"""
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         
@@ -29,15 +29,6 @@ class CameraControlWidget(QWidget):
         res_layout.addWidget(self.resolution_combo)
         res_group.setLayout(res_layout)
         layout.addWidget(res_group)
-        
-        # 자동 노출 안내
-        info_group = QGroupBox("카메라 설정")
-        info_layout = QVBoxLayout()
-        info_label = QLabel("✅ 자동 노출\n✅ 자동 화이트밸런스\n✅ 최대 속도")
-        info_label.setStyleSheet("color: #27ae60; padding: 5px;")
-        info_layout.addWidget(info_label)
-        info_group.setLayout(info_layout)
-        layout.addWidget(info_group)
         
         layout.addStretch()
         self.setLayout(layout)
