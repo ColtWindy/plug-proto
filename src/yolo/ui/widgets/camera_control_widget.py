@@ -2,48 +2,62 @@
 """
 카메라 제어 위젯
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QGroupBox
-from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox
+from PySide6.QtCore import Qt, Signal
 
 
-class CameraControlWidget(QWidget):
+class CameraControlWidget(QGroupBox):
     """카메라 전용 제어 위젯"""
     
     # 시그널
-    resolution_changed = Signal(object)
+    start_camera = Signal()
+    stop_camera = Signal()
     
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__("카메라 제어", parent)
+        self.is_running = False
         self.init_ui()
     
     def init_ui(self):
         """UI 초기화"""
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
         
-        # 해상도
-        res_group = QGroupBox("해상도")
-        res_layout = QVBoxLayout()
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
-        res_layout.addWidget(self.resolution_combo)
-        res_group.setLayout(res_layout)
-        layout.addWidget(res_group)
+        # 제어 버튼
+        btn_layout = QHBoxLayout()
+        
+        self.start_btn = QPushButton("▶ 시작")
+        self.start_btn.setMinimumHeight(40)
+        self.start_btn.clicked.connect(self._on_start)
+        btn_layout.addWidget(self.start_btn)
+        
+        self.stop_btn = QPushButton("⏹ 중지")
+        self.stop_btn.setMinimumHeight(40)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._on_stop)
+        btn_layout.addWidget(self.stop_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # 상태 표시
+        self.status_label = QLabel("대기 중")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
         
         layout.addStretch()
         self.setLayout(layout)
     
-    def setup_resolution(self, resolutions, current_index):
-        """해상도 설정"""
-        self.resolution_combo.clear()
-        for res in resolutions:
-            self.resolution_combo.addItem(res['text'], res['desc'])
-        self.resolution_combo.setCurrentIndex(current_index)
+    def _on_start(self):
+        """카메라 시작"""
+        self.is_running = True
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.status_label.setText("실행 중")
+        self.start_camera.emit()
     
-    def _on_resolution_changed(self, index):
-        """해상도 변경"""
-        if index >= 0:
-            resolution = self.resolution_combo.itemData(index)
-            if resolution:
-                self.resolution_changed.emit(resolution)
-
+    def _on_stop(self):
+        """카메라 중지"""
+        self.is_running = False
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.status_label.setText("중지됨")
+        self.stop_camera.emit()

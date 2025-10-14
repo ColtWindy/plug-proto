@@ -6,7 +6,7 @@ PyTorch 전용 윈도우
 from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, 
                                 QPushButton, QHBoxLayout, QSizePolicy, QComboBox, 
-                                QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, 
+                                QGroupBox, QRadioButton, QButtonGroup, 
                                 QTextEdit, QScrollArea)
 from PySide6.QtCore import Qt
 from camera.camera_controller import CameraController
@@ -39,6 +39,7 @@ class PyTorchWindow(QMainWindow):
         self.source = None
         self.source_type = 'camera'
         self.is_running = False
+        self.is_paused = False
         self.video_files = self._scan_video_files()
         self._pixmap_cache = None
         
@@ -85,9 +86,6 @@ class PyTorchWindow(QMainWindow):
         # 모델 정보
         layout.addWidget(self._create_model_info())
         
-        # 제어 버튼
-        layout.addWidget(self._create_control_buttons())
-        
         # 소스 선택
         layout.addWidget(self._create_source_selector())
         
@@ -103,17 +101,24 @@ class PyTorchWindow(QMainWindow):
         self.inference_config_widget.config_changed.connect(self._on_inference_config_changed)
         layout.addWidget(self.inference_config_widget)
         
-        # 카메라/비디오 설정
-        self.control_stack = QStackedWidget()
+        # 카메라 제어
         self.camera_widget = CameraControlWidget()
-        self.camera_widget.resolution_changed.connect(self._on_resolution_changed)
-        self.control_stack.addWidget(self.camera_widget)
+        self.camera_widget.start_camera.connect(self._on_start_camera)
+        self.camera_widget.stop_camera.connect(self._on_stop_camera)
+        layout.addWidget(self.camera_widget)
         
+        # 비디오 제어
         self.video_widget = VideoControlWidget(self.video_files)
+        self.video_widget.play_pause.connect(self._on_video_play_pause)
+        self.video_widget.stop.connect(self._on_video_stop)
+        self.video_widget.step_frame.connect(self._on_step_frame)
+        self.video_widget.seek_requested.connect(self._on_seek_frame)
         self.video_widget.fps_changed.connect(self._on_fps_changed)
-        self.control_stack.addWidget(self.video_widget)
+        self.video_widget.loop_changed.connect(self._on_loop_changed)
+        layout.addWidget(self.video_widget)
         
-        layout.addWidget(self.control_stack)
+        # 초기 상태 설정
+        self._update_control_visibility()
         layout.addStretch()
         
         panel.setLayout(layout)
@@ -303,20 +308,26 @@ class PyTorchWindow(QMainWindow):
     
     def _on_source_changed(self):
         """소스 변경"""
-        if self.is_running:
+        if self.is_running or self.is_paused:
             return
         
         self.source_type = 'camera' if self.camera_radio.isChecked() else 'file'
         self._update_source_ui()
+        self._update_control_visibility()
     
     def _update_source_ui(self):
         """소스에 따른 UI 업데이트"""
         is_camera = self.source_type == 'camera'
         self.video_file_group.setVisible(not is_camera)
-        self.control_stack.setCurrentIndex(0 if is_camera else 1)
         
         mode = "카메라" if is_camera else "비디오 파일"
-        self.status_label.setText(f"{mode} 모드 - 시작 버튼을 클릭하세요")
+        self.status_label.setText(f"{mode} 모드")
+    
+    def _update_control_visibility(self):
+        """소스에 따른 컨트롤 가시성"""
+        is_camera = self.source_type == 'camera'
+        self.camera_widget.setVisible(is_camera)
+        self.video_widget.setVisible(not is_camera)
     
     def _on_model_changed(self, index):
         """모델 변경"""
@@ -346,11 +357,98 @@ class PyTorchWindow(QMainWindow):
         info_text = self._get_model_info(model, model_path)
         self.info_text.setText(info_text)
     
-    def _on_resolution_changed(self, resolution):
-        """해상도 변경"""
-        if self.is_running or not self.source:
+    def _on_start_camera(self):
+        """카메라 시작"""
+        if not self._init_source():
+            self.camera_widget._on_stop()
             return
-        self.source.set_resolution(resolution)
+        
+        self.is_running = True
+        self.is_paused = False
+        self.source.is_running = True
+        self.inference_engine.reset_stats()
+        self._pixmap_cache = None
+        
+        if not self.inference_worker.isRunning():
+            self.inference_worker.start()
+        
+        self.source.start_trigger()
+        self.status_label.setText("실행 중...")
+        print("\n🎬 카메라 시작")
+    
+    def _on_stop_camera(self):
+        """카메라 중지"""
+        self._on_stop()
+    
+    def _on_video_play_pause(self):
+        """비디오 재생/일시정지"""
+        if self.is_paused:
+            self._on_resume()
+        elif self.is_running:
+            self._on_pause()
+        else:
+            self._on_start()
+    
+    def _on_video_stop(self):
+        """비디오 중지"""
+        self._on_stop()
+    
+    def _on_step_frame(self, delta):
+        """프레임 단위 이동 (일시정지 중에만)"""
+        if not self.is_paused or not self.source or self.source_type != 'file':
+            return
+        
+        frame = self.source.step_frame(delta)
+        if frame is not None:
+            self._process_single_frame(frame)
+    
+    def _on_seek_frame(self, frame_number):
+        """특정 프레임으로 이동"""
+        if not self.source or self.source_type != 'file':
+            return
+        
+        # 재생 중이면 일시적으로 멈추고 탐색
+        was_running = self.is_running
+        if was_running:
+            self.source.stop_trigger()
+        
+        self.source.seek_frame(frame_number)
+        
+        # 일시정지 중이면 프레임 표시
+        if self.is_paused:
+            frame = self.source.step_frame(0)
+            if frame is not None:
+                self._process_single_frame(frame)
+        
+        # 재생 중이었으면 다시 시작
+        if was_running:
+            target_fps = self.video_widget.fps_slider.value()
+            self.source.start_trigger(target_fps)
+    
+    def _on_loop_changed(self, loop):
+        """루프 설정 변경"""
+        if self.source and self.source_type == 'file':
+            self.source.loop = loop
+            print(f"✅ 루프 재생: {loop}")
+    
+    def _on_progress_updated(self, current_frame, total_frames, time_sec):
+        """진행률 업데이트"""
+        self.video_widget.update_progress(current_frame, total_frames, time_sec)
+    
+    def _reprocess_current_frame(self):
+        """현재 프레임 재추론 (일시정지 중)"""
+        if not self.source or self.source_type != 'file':
+            return
+        
+        frame = self.source.get_current_frame()
+        if frame is not None:
+            self._process_single_frame(frame)
+    
+    def _process_single_frame(self, frame):
+        """단일 프레임 추론 (일시정지용)"""
+        q_image, stats = self.inference_engine.process_frame(frame)
+        self._display_frame(q_image)
+        self._update_status_label(stats)
     
     def _on_fps_changed(self, fps):
         """FPS 변경"""
@@ -362,11 +460,16 @@ class PyTorchWindow(QMainWindow):
             self.source._update_timer_interval()
     
     def _on_inference_config_changed(self, config):
-        """추론 설정 변경"""
+        """추론 설정 변경 (재생/일시정지 중 모두 적용)"""
         self.inference_config = config
         self.inference_engine.config = config
         print(f"✅ 추론 설정: conf={config.conf:.2f}, iou={config.iou:.2f}, "
               f"imgsz={config.imgsz}, max_det={config.max_det}, augment={config.augment}")
+        
+        # 일시정지 중이면 현재 프레임 재추론 (재생 중에는 자동 적용)
+        if hasattr(self, 'is_paused') and self.is_paused and self.source and self.source_type == 'file':
+            if hasattr(self, '_reprocess_current_frame'):
+                self._reprocess_current_frame()
     
     def _on_frame_ready(self, frame_bgr):
         """프레임 콜백"""
@@ -402,11 +505,12 @@ class PyTorchWindow(QMainWindow):
         self.status_label.setText(text)
     
     def _on_start(self):
-        """시작"""
+        """비디오 시작"""
         if not self._init_source():
             return
         
         self.is_running = True
+        self.is_paused = False
         self.source.is_running = True
         self.inference_engine.reset_stats()
         self._pixmap_cache = None
@@ -414,16 +518,45 @@ class PyTorchWindow(QMainWindow):
         if not self.inference_worker.isRunning():
             self.inference_worker.start()
         
-        if self.source_type == 'camera':
-            self.source.start_trigger()
-            print("\n🎬 카메라 시작")
-        else:
-            target_fps = self.video_widget.fps_slider.value()
-            self.source.start_trigger(target_fps)
-            print(f"\n🎬 비디오 시작 (FPS: {target_fps})")
+        target_fps = self.video_widget.fps_slider.value()
+        self.source.start_trigger(target_fps)
         
-        self._set_ui_running(True)
+        self.video_widget.set_playing(True)
+        self.video_widget.set_controls_enabled(False)
         self.status_label.setText("실행 중...")
+        print(f"\n🎬 비디오 시작 (FPS: {target_fps})")
+    
+    def _on_pause(self):
+        """일시정지 (비디오만)"""
+        if not self.is_running:
+            return
+        
+        self.is_paused = True
+        self.is_running = False
+        self.source.is_running = False
+        self.source.stop_trigger()
+        
+        self.video_widget.set_playing(False)
+        self.video_widget.set_controls_enabled(True)
+        self.status_label.setText("일시정지")
+        print("⏸ 일시정지")
+    
+    def _on_resume(self):
+        """재개 (일시정지 해제)"""
+        if not self.is_paused:
+            return
+        
+        self.is_paused = False
+        self.is_running = True
+        self.source.is_running = True
+        
+        target_fps = self.video_widget.fps_slider.value()
+        self.source.start_trigger(target_fps)
+        
+        self.video_widget.set_playing(True)
+        self.video_widget.set_controls_enabled(False)
+        self.status_label.setText("실행 중...")
+        print("▶ 재개")
     
     def _init_source(self):
         """소스 초기화"""
@@ -445,6 +578,9 @@ class PyTorchWindow(QMainWindow):
                 self.source = VideoFileController(video_path)
                 self.source.initialize()
                 self.source.signals.frame_ready.connect(self._on_frame_ready)
+                self.source.signals.progress_updated.connect(self._on_progress_updated)
+                # 비디오 정보 전달
+                self.video_widget.set_video_info(self.source.total_frames, self.source.video_fps)
             
             return True
         except Exception as e:
@@ -453,11 +589,12 @@ class PyTorchWindow(QMainWindow):
             return False
     
     def _on_stop(self):
-        """중지"""
+        """중지 (완전 정지, 소스 해제)"""
         if not self.source:
             return
         
         self.is_running = False
+        self.is_paused = False
         self.source.is_running = False
         
         try:
@@ -465,23 +602,27 @@ class PyTorchWindow(QMainWindow):
         except:
             pass
         
+        try:
+            if self.source_type == 'file':
+                self.source.signals.progress_updated.disconnect(self._on_progress_updated)
+        except:
+            pass
+        
         self.source.stop_trigger()
         
-        if self.source_type == 'file':
+        if self.source_type == 'camera':
+            # 카메라는 cleanup하지 않음
+            pass
+        else:
             self.source.cleanup()
             self.source = None
+            self.video_widget.set_playing(False)
+            self.video_widget.set_controls_enabled(False)
         
-        self._set_ui_running(False)
+        self.video_label.clear()
         self.status_label.setText("중지됨")
+        print("⏹ 중지")
     
-    def _set_ui_running(self, running):
-        """UI 실행 상태 설정"""
-        self.start_button.setEnabled(not running)
-        self.stop_button.setEnabled(running)
-        self.model_combo.setEnabled(not running)
-        self.task_combo.setEnabled(not running)
-        self.camera_radio.setEnabled(not running)
-        self.file_radio.setEnabled(not running)
     
     def resizeEvent(self, event):
         """윈도우 크기 변경"""

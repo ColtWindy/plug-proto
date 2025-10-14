@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal, QTimer
 class VideoSignals(QObject):
     """비디오 시그널"""
     frame_ready = Signal(np.ndarray)  # BGR 프레임
+    progress_updated = Signal(int, int, float)  # (current_frame, total_frames, time_sec)
 
 
 class VideoFileController:
@@ -22,6 +23,7 @@ class VideoFileController:
         self.cap = None
         self.is_running = False
         self.target_fps = 30
+        self.loop = True
         
         # 시그널
         self.signals = VideoSignals()
@@ -35,6 +37,7 @@ class VideoFileController:
         self.frame_height = 0
         self.total_frames = 0
         self.video_fps = 30
+        self.current_frame = None
     
     def initialize(self):
         """비디오 파일 초기화"""
@@ -95,12 +98,23 @@ class VideoFileController:
             ret, frame = self.cap.read()
             
             if not ret:
-                # 영상 끝 - 처음으로 되감기
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = self.cap.read()
+                if self.loop:
+                    # 루프 - 처음으로 되감기
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = self.cap.read()
+                else:
+                    # 루프 없음 - 정지
+                    self.is_running = False
+                    self.stop_trigger()
+                    return
             
             if ret:
-                # BGR 프레임 시그널 발생
+                self.current_frame = frame
+                # 진행률 업데이트
+                current_pos = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+                time_sec = current_pos / self.video_fps if self.video_fps > 0 else 0
+                self.signals.progress_updated.emit(current_pos, self.total_frames, time_sec)
+                # 프레임 발생
                 self.signals.frame_ready.emit(frame)
                 
         except Exception as e:
@@ -150,6 +164,45 @@ class VideoFileController:
     def set_manual_exposure(self, exposure_ms):
         """수동 노출 (더미)"""
         pass
+    
+    def get_current_frame_number(self):
+        """현재 프레임 번호"""
+        if not self.cap:
+            return 0
+        return int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+    
+    def seek_frame(self, frame_number):
+        """특정 프레임으로 이동"""
+        if not self.cap:
+            return
+        frame_number = max(0, min(frame_number, self.total_frames - 1))
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+    
+    def step_frame(self, delta):
+        """프레임 단위 이동 및 현재 프레임 반환"""
+        if not self.cap:
+            return None
+        
+        current = self.get_current_frame_number()
+        target = current + delta
+        target = max(0, min(target, self.total_frames - 1))
+        
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+        ret, frame = self.cap.read()
+        
+        if ret:
+            self.current_frame = frame
+            # 다음 read를 위해 한 프레임 뒤로
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+            # 진행률 업데이트
+            time_sec = target / self.video_fps if self.video_fps > 0 else 0
+            self.signals.progress_updated.emit(target, self.total_frames, time_sec)
+            return frame
+        return None
+    
+    def get_current_frame(self):
+        """현재 프레임 가져오기 (일시정지 중 재추론용)"""
+        return self.current_frame
     
     # hCamera 속성 (호환성)
     @property

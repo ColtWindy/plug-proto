@@ -3,9 +3,10 @@
 추론 설정 위젯
 """
 from PySide6.QtWidgets import (QGroupBox, QVBoxLayout, QHBoxLayout, 
-                                QLabel, QSlider, QCheckBox, QSpinBox, QWidget)
+                                QLabel, QCheckBox, QSpinBox, QWidget)
 from PySide6.QtCore import Qt, Signal
 from inference.config import EngineConfig, PTConfig
+from ui.widgets.click_slider import ClickSlider
 
 
 class InferenceConfigWidget(QGroupBox):
@@ -44,7 +45,7 @@ class InferenceConfigWidget(QGroupBox):
         label = QLabel("신뢰도:")
         label.setMinimumWidth(60)
         
-        self.conf_slider = QSlider(Qt.Horizontal)
+        self.conf_slider = ClickSlider(Qt.Horizontal)
         self.conf_slider.setMinimum(0)
         self.conf_slider.setMaximum(100)
         self.conf_slider.setValue(int(self.config.conf * 100))
@@ -69,7 +70,7 @@ class InferenceConfigWidget(QGroupBox):
         label = QLabel("IoU:")
         label.setMinimumWidth(60)
         
-        self.iou_slider = QSlider(Qt.Horizontal)
+        self.iou_slider = ClickSlider(Qt.Horizontal)
         self.iou_slider.setMinimum(0)
         self.iou_slider.setMaximum(100)
         self.iou_slider.setValue(int(self.config.iou * 100))
