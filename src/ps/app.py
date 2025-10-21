@@ -9,8 +9,6 @@ import os
 import time
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap
@@ -529,7 +527,6 @@ def main():
     
     if not wayland_display:
         print("❌ 사용 가능한 Wayland 디스플레이를 찾을 수 없습니다")
-        print("💡 DISPLAY=:0 환경변수를 설정하거나 X11 디스플레이를 확인하세요")
         sys.exit(1)
     
     socket_path = os.path.join(xdg_runtime_dir, wayland_display)
