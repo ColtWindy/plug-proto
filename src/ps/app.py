@@ -430,7 +430,23 @@ class MainWindow(QMainWindow):
         """컨트롤 패널 설정"""
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
-        controls.setMaximumHeight(80)
+        controls.setMaximumHeight(100)
+        
+        # 토글 버튼 레이아웃
+        button_layout = QHBoxLayout()
+        
+        self.bbox_btn = QPushButton("바운딩 박스: ON")
+        self.bbox_btn.clicked.connect(self.on_bbox_toggle)
+        self.bbox_btn.setFixedWidth(150)
+        button_layout.addWidget(self.bbox_btn)
+        
+        self.camera_feed_btn = QPushButton("촬영화면: ON")
+        self.camera_feed_btn.clicked.connect(self.on_camera_feed_toggle)
+        self.camera_feed_btn.setFixedWidth(150)
+        button_layout.addWidget(self.camera_feed_btn)
+        
+        button_layout.addStretch()
+        controls_layout.addLayout(button_layout)
         
         # 게인 슬라이더
         gain_layout = QHBoxLayout()
@@ -523,6 +539,28 @@ class MainWindow(QMainWindow):
             print(f"⚠️ QImage to BGR 변환 실패: {e}")
             return None
 
+    def on_bbox_toggle(self):
+        """바운딩 박스 표시 토글"""
+        if self.yolo_renderer:
+            self.yolo_renderer.draw_boxes = not self.yolo_renderer.draw_boxes
+            # 버튼 텍스트 업데이트
+            status = "ON" if self.yolo_renderer.draw_boxes else "OFF"
+            self.bbox_btn.setText(f"바운딩 박스: {status}")
+            # 캐시 무효화
+            self.opengl_window._cache_key = None
+            print(f"{'✅ 바운딩 박스 표시' if self.yolo_renderer.draw_boxes else '❌ 바운딩 박스 숨김'}")
+    
+    def on_camera_feed_toggle(self):
+        """촬영화면 표시 토글"""
+        if self.yolo_renderer:
+            self.yolo_renderer.draw_camera_feed = not self.yolo_renderer.draw_camera_feed
+            # 버튼 텍스트 업데이트
+            status = "ON" if self.yolo_renderer.draw_camera_feed else "OFF"
+            self.camera_feed_btn.setText(f"촬영화면: {status}")
+            # 캐시 무효화
+            self.opengl_window._cache_key = None
+            print(f"{'✅ 촬영화면 표시' if self.yolo_renderer.draw_camera_feed else '❌ 촬영화면 숨김 (검은배경)'}")
+    
     def on_gain_change(self, value):
         """게인 슬라이더 변경"""
         if self.camera:

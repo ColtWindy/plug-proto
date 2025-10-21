@@ -17,6 +17,8 @@ class CustomYOLORenderer:
             model: YOLO 모델 객체 (names 속성 필요)
         """
         self.model = model
+        self.draw_boxes = True  # 바운딩 박스/라벨 표시 여부
+        self.draw_camera_feed = True  # 촬영화면 표시 여부
     
     def render(self, frame_bgr, result):
         """
@@ -30,12 +32,20 @@ class CustomYOLORenderer:
             QImage: 시각화된 QImage
         """
         if not hasattr(result, 'boxes') or len(result.boxes) == 0:
-            # 탐지 결과 없으면 원본 반환
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            # 탐지 결과 없으면 원본 또는 검은 배경 반환
+            if self.draw_camera_feed:
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            else:
+                # 검은 배경
+                frame_rgb = np.zeros_like(frame_bgr)
             return self._numpy_to_qimage(frame_rgb)
         
-        # 프레임 복사
-        annotated = frame_bgr.copy()
+        # 촬영화면 또는 검은 배경
+        if self.draw_camera_feed:
+            annotated = frame_bgr.copy()
+        else:
+            # 검은 배경 생성
+            annotated = np.zeros_like(frame_bgr)
         
         # 각 탐지 결과 그리기
         for box in result.boxes:
@@ -47,16 +57,16 @@ class CustomYOLORenderer:
             class_name = self.model.names[cls] if hasattr(self.model, 'names') else f"class_{cls}"
             color = self._get_class_color(cls)
             
-            # 바운딩 박스
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            # 바운딩 박스 및 라벨 (옵션)
+            if self.draw_boxes:
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                
+                label = f"{class_name} {conf:.2f}"
+                (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(annotated, (x1, y1 - label_h - 4), (x1 + label_w, y1), color, -1)
+                cv2.putText(annotated, label, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
-            # 라벨
-            label = f"{class_name} {conf:.2f}"
-            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(annotated, (x1, y1 - label_h - 4), (x1 + label_w, y1), color, -1)
-            cv2.putText(annotated, label, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            # 중앙 도형
+            # 중앙 도형 (항상 표시)
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
             size = min(x2 - x1, y2 - y1) // 3
