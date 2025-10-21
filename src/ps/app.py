@@ -8,10 +8,13 @@ import sys
 import os
 import time
 import threading
+import cv2
+import numpy as np
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtOpenGL import QOpenGLWindow
-from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap
+from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage
 from PySide6.QtCore import Qt, QDateTime
 from OpenGL import GL
 from opengl_example.camera_controller import OpenGLCameraController
@@ -19,6 +22,9 @@ from _lib import mvsdk
 from _lib.wayland_utils import setup_wayland_environment
 from _native.wayland_presentation import WaylandPresentationMonitor
 from config import CAMERA_IP
+from yolo.inference.model_manager import ModelManager
+from yolo.inference.engine import InferenceEngine
+from yolo.inference.config import EngineConfig
 
 class PresentationMonitor:
     """C++ wp_presentation 헬퍼 기반 프레임 표시 추적"""
@@ -112,27 +118,33 @@ class FrameMonitor:
 class CameraOpenGLWindow(QOpenGLWindow):
     """카메라 화면을 표시하는 OpenGL 윈도우 (VSync 동기화)"""
     
-    def __init__(self, parent_window=None):
+    def __init__(self, parent_window=None, inference_engine=None):
         super().__init__()
-        self.setTitle("OpenGL Camera - VSync")
+        self.setTitle("OpenGL Camera - VSync + YOLO")
         self.current_pixmap = None
         self.pending_pixmap = None
+        self.current_frame_bgr = None  # YOLO 추론용 원본 프레임
         self._frame = 0
         self.show_black = True  # True: 검은 화면, False: 카메라 화면
         self.parent_window = parent_window
+        self.inference_engine = inference_engine
         
         # 스케일 캐시 (성능 최적화)
         self._scaled_cache = None
         self._cache_key = None  # (pixmap.cacheKey(), w, h)
         
         # 텍스트 렌더링 캐시
-        self._info_font = QFont("Monospace", 12)
+        self._info_font = QFont("Monospace", 8)  # 작게 변경
         self._info_pen = QPen(QColor(0, 255, 0))
         
         # 프레임 모니터 (GPU 하드웨어 레벨 검출)
         self.monitor = FrameMonitor(self)
         self.presentation = None  # initializeGL에서 초기화
-        self._stress_test = False
+        
+        # YOLO 통계
+        self.last_infer_time = 0.0
+        self.avg_infer_time = 0.0
+        self.detected_count = 0
         
         # Wayland 프레임 스킵 감지
         self._last_swap_time = None
@@ -176,7 +188,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
         h = self.height()
         
         if self.show_black:
-            # 검은 화면 - 텍스트만 표시
+            # 검은 화면 - 텍스트만 표시 (작게)
             painter = QPainter(self)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
@@ -188,10 +200,12 @@ class CameraOpenGLWindow(QOpenGLWindow):
             pres_info += f" | V:{self.presentation.vsync_synced_count} Z:{self.presentation.zero_copy_count}"
             
             info_text = f"Frame: {self._frame} | 검은화면 | GPU: {self.monitor.gpu_backlog_count}{pres_info}"
-            painter.drawText(10, 25, info_text)
+            painter.drawText(10, 15, info_text)
             painter.end()
         else:
-            # 카메라 화면
+            # 카메라 화면 - YOLO 추론 수행
+            display_pixmap = None
+            
             # 대기 중인 픽셀맵이 있으면 교체
             if self.pending_pixmap is not None:
                 self.current_pixmap = self.pending_pixmap
@@ -199,15 +213,30 @@ class CameraOpenGLWindow(QOpenGLWindow):
                 # 캐시 무효화
                 self._cache_key = None
             
+            # YOLO 추론 (원본 프레임이 있을 때만)
+            if self.current_frame_bgr is not None and self.inference_engine:
+                try:
+                    q_image, stats = self.inference_engine.process_frame(self.current_frame_bgr)
+                    display_pixmap = QPixmap.fromImage(q_image)
+                    # 통계 업데이트
+                    self.last_infer_time = stats['infer_time']
+                    self.avg_infer_time = stats['avg_infer_time']
+                    self.detected_count = stats['detected_count']
+                except Exception as e:
+                    print(f"❌ YOLO 추론 실패: {e}")
+                    display_pixmap = self.current_pixmap
+            else:
+                display_pixmap = self.current_pixmap
+            
             painter = QPainter(self)
             painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
             
-            # 카메라 이미지 표시
-            if self.current_pixmap and not self.current_pixmap.isNull():
+            # 이미지 표시
+            if display_pixmap and not display_pixmap.isNull():
                 # 스케일 캐시: 창 크기나 이미지가 바뀔 때만 스케일
-                key = (self.current_pixmap.cacheKey(), w, h)
+                key = (display_pixmap.cacheKey(), w, h)
                 if key != self._cache_key:
-                    self._scaled_cache = self.current_pixmap.scaled(
+                    self._scaled_cache = display_pixmap.scaled(
                         w, h, 
                         Qt.KeepAspectRatio, 
                         Qt.FastTransformation  # 빠른 변환
@@ -219,11 +248,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
                 y = (h - self._scaled_cache.height()) // 2
                 painter.drawPixmap(x, y, self._scaled_cache)
             
-                # 부하 테스트: 의도적 지연
-                if self._stress_test:
-                    time.sleep(0.030)  # 30ms 지연
-            
-            # 프레임 정보 표시
+            # 프레임 정보 표시 (작게, 상단)
             painter.setFont(self._info_font)
             painter.setPen(self._info_pen)
             
@@ -233,8 +258,13 @@ class CameraOpenGLWindow(QOpenGLWindow):
             pres_info += f" | P:{self.presentation.presented_count} D:{self.presentation.discarded_count}"
             pres_info += f" | V:{self.presentation.vsync_synced_count} Z:{self.presentation.zero_copy_count}"
             
-            info_text = f"Frame: {self._frame} | 카메라화면 | GPU: {self.monitor.gpu_backlog_count}{pres_info}"
-            painter.drawText(10, 25, info_text)
+            info_text = f"Frame: {self._frame} | GPU: {self.monitor.gpu_backlog_count}{pres_info}"
+            painter.drawText(10, 15, info_text)
+            
+            # YOLO 추론 정보 표시 (두 번째 줄)
+            if self.inference_engine:
+                yolo_text = f"추론: {self.last_infer_time:.1f}ms (평균: {self.avg_infer_time:.1f}ms) | 탐지: {self.detected_count}"
+                painter.drawText(10, 30, yolo_text)
             
             painter.end()
         
@@ -245,12 +275,14 @@ class CameraOpenGLWindow(QOpenGLWindow):
         if not self.monitor.last_backlog_detected:
             self.presentation.request_feedback()
 
-    def update_camera_frame(self, q_image):
+    def update_camera_frame(self, q_image, frame_bgr=None):
         """카메라 프레임 업데이트 (메인 스레드에서 안전)"""
         if q_image is None or q_image.isNull():
             self.pending_pixmap = None
+            self.current_frame_bgr = None
         else:
             self.pending_pixmap = QPixmap.fromImage(q_image)
+            self.current_frame_bgr = frame_bgr  # YOLO 추론용 원본 프레임
     
     def on_frame_swapped(self):
         """frameSwapped 시그널 처리 - VSync 타이밍에서 카메라 트리거"""
@@ -303,10 +335,13 @@ class MainWindow(QMainWindow):
         self.exposure_time_ms = 9
         self.vsync_delay_ms = 17  # VSync 딜레이 (셔터 타이밍 조정)
         
-        self.setWindowTitle("OpenGL Camera - No Frame Drop")
+        self.setWindowTitle("OpenGL Camera - YOLO")
         
-        # OpenGL 윈도우 생성
-        self.opengl_window = CameraOpenGLWindow(parent_window=self)
+        # YOLO 모델 초기화
+        self.inference_engine = self._init_yolo_model()
+        
+        # OpenGL 윈도우 생성 (inference_engine 전달)
+        self.opengl_window = CameraOpenGLWindow(parent_window=self, inference_engine=self.inference_engine)
         
         # QOpenGLWindow를 QWidget 컨테이너로 변환
         container = QWidget.createWindowContainer(self.opengl_window, self)
@@ -328,53 +363,45 @@ class MainWindow(QMainWindow):
         
         # 카메라 초기화
         self.setup_camera()
+    
+    def _init_yolo_model(self):
+        """YOLO 모델 초기화"""
+        try:
+            models_dir = Path(__file__).parent.parent / "yolo" / "models"
+            if not models_dir.exists():
+                print("⚠️ YOLO 모델 디렉토리 없음 - YOLO 비활성화")
+                return None
+            
+            model_manager = ModelManager(models_dir)
+            
+            # .engine 파일만 검색
+            engine_files = sorted(models_dir.glob("*.engine"))
+            if not engine_files:
+                print("⚠️ .engine 파일 없음 - YOLO 비활성화")
+                return None
+            
+            model_manager.model_list = [(f.name, str(f)) for f in engine_files]
+            model_manager.current_model = model_manager._load_single_model(str(engine_files[0]))
+            
+            # InferenceEngine 생성
+            inference_config = EngineConfig()
+            inference_engine = InferenceEngine(
+                model_manager.current_model,
+                str(engine_files[0]),
+                inference_config
+            )
+            
+            print(f"✅ YOLO 모델 로드: {engine_files[0].name}")
+            return inference_engine
+        except Exception as e:
+            print(f"⚠️ YOLO 초기화 실패: {e} - YOLO 비활성화")
+            return None
 
     def setup_controls(self, parent_layout):
         """컨트롤 패널 설정"""
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
-        controls.setMaximumHeight(100)
-        
-        # 버튼 레이아웃
-        button_layout = QHBoxLayout()
-        
-        # 부하 테스트 버튼
-        self.stress_btn = QPushButton("부하 테스트 OFF")
-        self.stress_btn.clicked.connect(self.toggle_stress_test)
-        self.stress_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                font-weight: bold;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-        button_layout.addWidget(self.stress_btn)
-        
-        # 종료 버튼
-        quit_btn = QPushButton("종료 (Q)")
-        quit_btn.clicked.connect(self.close)
-        quit_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                font-weight: bold;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
-        button_layout.addWidget(quit_btn)
-        button_layout.addStretch()
-        controls_layout.addLayout(button_layout)
+        controls.setMaximumHeight(80)
         
         # 게인 슬라이더
         gain_layout = QHBoxLayout()
@@ -446,8 +473,26 @@ class MainWindow(QMainWindow):
     def on_new_camera_frame(self, q_image):
         """카메라에서 새 프레임이 도착했을 때"""
         if q_image and not q_image.isNull():
+            # QImage를 BGR 프레임으로 변환 (YOLO 추론용)
+            frame_bgr = self._qimage_to_bgr(q_image)
             # OpenGL 윈도우에 프레임 전달
-            self.opengl_window.update_camera_frame(q_image)
+            self.opengl_window.update_camera_frame(q_image, frame_bgr)
+    
+    def _qimage_to_bgr(self, q_image):
+        """QImage를 BGR numpy 배열로 변환"""
+        try:
+            width = q_image.width()
+            height = q_image.height()
+            ptr = q_image.bits()
+            
+            # QImage는 RGB888 포맷
+            arr = np.array(ptr).reshape(height, width, 3)
+            # RGB → BGR 변환
+            frame_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            return frame_bgr
+        except Exception as e:
+            print(f"⚠️ QImage to BGR 변환 실패: {e}")
+            return None
 
     def on_gain_change(self, value):
         """게인 슬라이더 변경"""
@@ -467,13 +512,6 @@ class MainWindow(QMainWindow):
         """VSync 딜레이 슬라이더 변경"""
         self.vsync_delay_ms = value
         self.delay_label.setText(f"{value}ms")
-    
-    def toggle_stress_test(self):
-        """부하 테스트 토글"""
-        self.opengl_window._stress_test = not self.opengl_window._stress_test
-        status = "ON" if self.opengl_window._stress_test else "OFF"
-        self.stress_btn.setText(f"부하 테스트 {status}")
-        print(f"{'🔥 부하 테스트 활성화 (30ms 지연)' if self.opengl_window._stress_test else '✅ 부하 테스트 비활성화'}")
     
     def on_vsync_frame(self):
         """VSync 프레임 신호 처리 - 검은 화면일 때 카메라 트리거"""
