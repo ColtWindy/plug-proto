@@ -25,6 +25,7 @@ from config import CAMERA_IP
 from yolo.inference.model_manager import ModelManager
 from yolo.inference.engine import InferenceEngine
 from yolo.inference.config import EngineConfig
+from ps.yolo_renderer import CustomYOLORenderer
 
 class PresentationMonitor:
     """C++ wp_presentation 헬퍼 기반 프레임 표시 추적"""
@@ -118,7 +119,7 @@ class FrameMonitor:
 class CameraOpenGLWindow(QOpenGLWindow):
     """카메라 화면을 표시하는 OpenGL 윈도우 (VSync 동기화)"""
     
-    def __init__(self, parent_window=None, inference_engine=None):
+    def __init__(self, parent_window=None, inference_engine=None, yolo_renderer=None):
         super().__init__()
         self.setTitle("OpenGL Camera - VSync + YOLO")
         self.current_pixmap = None
@@ -128,6 +129,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.show_black = True  # True: 검은 화면, False: 카메라 화면
         self.parent_window = parent_window
         self.inference_engine = inference_engine
+        self.yolo_renderer = yolo_renderer
         
         # 스케일 캐시 (성능 최적화)
         self._scaled_cache = None
@@ -214,14 +216,34 @@ class CameraOpenGLWindow(QOpenGLWindow):
                 self._cache_key = None
             
             # YOLO 추론 (원본 프레임이 있을 때만)
-            if self.current_frame_bgr is not None and self.inference_engine:
+            if self.current_frame_bgr is not None and self.inference_engine and self.yolo_renderer:
                 try:
-                    q_image, stats = self.inference_engine.process_frame(self.current_frame_bgr)
+                    # 추론 수행
+                    import time
+                    start_time = time.time()
+                    
+                    if self.inference_engine.config:
+                        results = self.inference_engine.model(self.current_frame_bgr, **self.inference_engine.config.to_dict())
+                    else:
+                        results = self.inference_engine.model(self.current_frame_bgr, verbose=False)
+                    
+                    infer_time = (time.time() - start_time) * 1000
+                    
+                    # 결과 처리
+                    if self.inference_engine.is_engine:
+                        result = results if not isinstance(results, list) else results[0]
+                    else:
+                        result = results[0] if isinstance(results, list) else results
+                    
+                    # 커스텀 렌더링
+                    q_image = self.yolo_renderer.render(self.current_frame_bgr, result)
                     display_pixmap = QPixmap.fromImage(q_image)
+                    
                     # 통계 업데이트
-                    self.last_infer_time = stats['infer_time']
-                    self.avg_infer_time = stats['avg_infer_time']
-                    self.detected_count = stats['detected_count']
+                    self.last_infer_time = infer_time
+                    self.inference_engine._update_infer_stats(infer_time)
+                    self.avg_infer_time = self.inference_engine.avg_infer_time
+                    self.detected_count = len(result.boxes) if hasattr(result, 'boxes') else 0
                 except Exception as e:
                     print(f"❌ YOLO 추론 실패: {e}")
                     display_pixmap = self.current_pixmap
@@ -338,10 +360,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("OpenGL Camera - YOLO")
         
         # YOLO 모델 초기화
-        self.inference_engine = self._init_yolo_model()
+        self.inference_engine, self.yolo_renderer = self._init_yolo_model()
         
-        # OpenGL 윈도우 생성 (inference_engine 전달)
-        self.opengl_window = CameraOpenGLWindow(parent_window=self, inference_engine=self.inference_engine)
+        # OpenGL 윈도우 생성
+        self.opengl_window = CameraOpenGLWindow(
+            parent_window=self, 
+            inference_engine=self.inference_engine,
+            yolo_renderer=self.yolo_renderer
+        )
         
         # QOpenGLWindow를 QWidget 컨테이너로 변환
         container = QWidget.createWindowContainer(self.opengl_window, self)
@@ -365,12 +391,12 @@ class MainWindow(QMainWindow):
         self.setup_camera()
     
     def _init_yolo_model(self):
-        """YOLO 모델 초기화"""
+        """YOLO 모델 및 렌더러 초기화"""
         try:
             models_dir = Path(__file__).parent.parent / "yolo" / "models"
             if not models_dir.exists():
                 print("⚠️ YOLO 모델 디렉토리 없음 - YOLO 비활성화")
-                return None
+                return None, None
             
             model_manager = ModelManager(models_dir)
             
@@ -378,7 +404,7 @@ class MainWindow(QMainWindow):
             engine_files = sorted(models_dir.glob("*.engine"))
             if not engine_files:
                 print("⚠️ .engine 파일 없음 - YOLO 비활성화")
-                return None
+                return None, None
             
             model_manager.model_list = [(f.name, str(f)) for f in engine_files]
             model_manager.current_model = model_manager._load_single_model(str(engine_files[0]))
@@ -391,11 +417,14 @@ class MainWindow(QMainWindow):
                 inference_config
             )
             
+            # CustomRenderer 생성
+            yolo_renderer = CustomYOLORenderer(model_manager.current_model)
+            
             print(f"✅ YOLO 모델 로드: {engine_files[0].name}")
-            return inference_engine
+            return inference_engine, yolo_renderer
         except Exception as e:
             print(f"⚠️ YOLO 초기화 실패: {e} - YOLO 비활성화")
-            return None
+            return None, None
 
     def setup_controls(self, parent_layout):
         """컨트롤 패널 설정"""
