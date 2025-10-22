@@ -22,7 +22,6 @@ from OpenGL import GL
 from opengl_example.camera_controller import OpenGLCameraController
 from _lib import mvsdk
 from _lib.wayland_utils import setup_wayland_environment
-from _native.wayland_presentation import WaylandPresentationMonitor
 from config import CAMERA_IP
 from yolo.inference.model_manager import ModelManager
 from yolo.inference.engine import InferenceEngine
@@ -31,95 +30,8 @@ from ps.yolo_renderer import CustomYOLORenderer
 
 
 # 상수 정의
-VSYNC_60HZ_MS = 16.67
-FRAME_SKIP_THRESHOLD = 1.5
-VSYNC_FLAG = 0x1
 BUSY_WAIT_THRESHOLD_MS = 0.001
 BUSY_WAIT_SLEEP_US = 0.0001
-
-
-def format_timestamp():
-    """타임스탬프 포맷"""
-    return QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
-
-
-def log_message(level, msg):
-    """로그 출력"""
-    print(f"[{format_timestamp()}] [{level}] {msg}")
-
-
-class PresentationMonitor:
-    """C++ wp_presentation 헬퍼 기반 프레임 표시 추적"""
-    
-    def __init__(self, window):
-        self.win = window
-        self.frame_count = 0
-        self.monitor = WaylandPresentationMonitor()
-        self.monitor.set_callback(self._on_feedback)
-        print("✅ WaylandPresentationMonitor (C++) 초기화 완료")
-    
-    def _on_feedback(self, feedback):
-        """프레임 스킵 시에만 로그"""
-        if not feedback.presented:
-            log_message("PRESENTATION", "📊 프레임 폐기 기록됨 (Wayland/GPU 스킵 감지됨)")
-    
-    def request_feedback(self):
-        """정상 프레임 통계 업데이트"""
-        self.frame_count += 1
-        timestamp_ns = int(time.time() * 1_000_000_000)
-        self.monitor.simulate_presented(timestamp_ns, self.frame_count, VSYNC_FLAG)
-    
-    @property
-    def presented_count(self):
-        return self.monitor.presented_count()
-    
-    @property
-    def discarded_count(self):
-        return self.monitor.discarded_count()
-    
-    @property
-    def vsync_synced_count(self):
-        return self.monitor.vsync_count()
-    
-    @property
-    def zero_copy_count(self):
-        return self.monitor.zero_copy_count()
-    
-    @property
-    def last_seq(self):
-        seq = self.monitor.last_sequence()
-        return seq if seq > 0 else None
-    
-    @property
-    def last_timestamp_ns(self):
-        return self.monitor.last_timestamp_ns()
-
-
-class FrameMonitor:
-    """GPU 하드웨어 레벨 프레임 검출"""
-    
-    def __init__(self, window):
-        self.win = window
-        self.last_fence = None
-        self.gpu_backlog_count = 0
-        self.last_backlog_detected = False
-    
-    def begin_frame(self):
-        """paintGL 시작 직전 - GPU 백로그 검사"""
-        self.last_backlog_detected = False
-        
-        if self.last_fence:
-            status = GL.glClientWaitSync(self.last_fence, 0, 0)
-            if status == GL.GL_TIMEOUT_EXPIRED:
-                self.gpu_backlog_count += 1
-                self.last_backlog_detected = True
-                log_message("GPU_BLOCK", "🚨 GPU 블록 - 이전 프레임 미완료 (실제 감지)")
-            GL.glDeleteSync(self.last_fence)
-            self.last_fence = None
-    
-    def end_frame(self):
-        """paintGL 끝 직후 - GPU fence 설정"""
-        self.last_fence = GL.glFenceSync(GL.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
 
 
 class CameraOpenGLWindow(QOpenGLWindow):
@@ -149,32 +61,18 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self._info_font = QFont("Monospace", 8)
         self._info_pen = QPen(QColor(0, 255, 0))
         
-        # 모니터링
-        self.monitor = FrameMonitor(self)
-        self.presentation = None
-        
         # YOLO 통계
         self.last_infer_time = 0.0
         self.avg_infer_time = 0.0
         self.detected_count = 0
         
-        # Wayland 프레임 스킵 감지
-        self._last_swap_time = None
-        self._expected_frame_time_ms = VSYNC_60HZ_MS
-        
         # frameSwapped 시그널 연결
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
-
-    def _init_presentation(self):
-        """Presentation 모니터 초기화 (한 번만 실행)"""
-        if self.presentation is None:
-            self.presentation = PresentationMonitor(self)
     
     def initializeGL(self):
         """OpenGL 초기화"""
         GL.glClearColor(0.0, 0.0, 0.0, 1.0)
         GL.glDisable(GL.GL_DEPTH_TEST)
-        self._init_presentation()
     
     def resizeGL(self, w, h):
         """윈도우 크기 변경 처리"""
@@ -182,20 +80,12 @@ class CameraOpenGLWindow(QOpenGLWindow):
 
     def paintGL(self):
         """프레임 렌더링 (VSync 동기화)"""
-        self._init_presentation()
-        self.monitor.begin_frame()
-        
         GL.glClear(GL.GL_COLOR_BUFFER_BIT)
         
         if self.show_black:
             self._render_black_screen()
         else:
             self._render_camera_screen()
-        
-        self.monitor.end_frame()
-        
-        if not self.monitor.last_backlog_detected:
-            self.presentation.request_feedback()
     
     def _render_black_screen(self):
         """검은 화면 렌더링"""
@@ -203,7 +93,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
         painter.setFont(self._info_font)
         painter.setPen(self._info_pen)
         
-        info_text = self._build_info_text("검은화면")
+        info_text = f"Frame: {self._frame} | 검은화면"
         painter.drawText(10, 15, info_text)
         painter.end()
     
@@ -225,7 +115,9 @@ class CameraOpenGLWindow(QOpenGLWindow):
         # 정보 텍스트 표시
         painter.setFont(self._info_font)
         painter.setPen(self._info_pen)
-        painter.drawText(10, 15, self._build_info_text())
+        
+        info_text = f"Frame: {self._frame}"
+        painter.drawText(10, 15, info_text)
         
         if self.inference_engine:
             yolo_text = f"추론: {self.last_infer_time:.1f}ms (평균: {self.avg_infer_time:.1f}ms) | 탐지: {self.detected_count}"
@@ -298,16 +190,6 @@ class CameraOpenGLWindow(QOpenGLWindow):
         x = (w - self._scaled_cache.width()) // 2
         y = (h - self._scaled_cache.height()) // 2
         painter.drawPixmap(x, y, self._scaled_cache)
-    
-    def _build_info_text(self, screen_type=""):
-        """정보 텍스트 생성"""
-        seq_str = f"{self.presentation.last_seq}" if self.presentation.last_seq is not None else "N/A"
-        pres_info = (f" | Seq: {seq_str}"
-                    f" | P:{self.presentation.presented_count} D:{self.presentation.discarded_count}"
-                    f" | V:{self.presentation.vsync_synced_count} Z:{self.presentation.zero_copy_count}")
-        
-        screen_info = f" | {screen_type}" if screen_type else ""
-        return f"Frame: {self._frame}{screen_info} | GPU: {self.monitor.gpu_backlog_count}{pres_info}"
 
     def update_camera_frame(self, q_image, frame_bgr=None):
         """카메라 프레임 업데이트"""
@@ -321,7 +203,6 @@ class CameraOpenGLWindow(QOpenGLWindow):
     def on_frame_swapped(self):
         """frameSwapped 시그널 처리"""
         self._frame += 1
-        self._detect_frame_skip()
         
         # VSync 프레임 신호 전달 (검은 화면일 때)
         if self.parent_window and self.show_black:
@@ -329,23 +210,6 @@ class CameraOpenGLWindow(QOpenGLWindow):
         
         self.show_black = not self.show_black
         self.update()
-    
-    def _detect_frame_skip(self):
-        """Wayland 프레임 스킵 감지"""
-        current_time = time.perf_counter() * 1000
-        
-        if self._last_swap_time is not None:
-            swap_interval = current_time - self._last_swap_time
-            
-            if swap_interval > self._expected_frame_time_ms * FRAME_SKIP_THRESHOLD:
-                skipped_frames = int(swap_interval / self._expected_frame_time_ms) - 1
-                log_message("WAYLAND_SKIP", 
-                           f"🚨 Wayland 프레임 스킵 감지 - {skipped_frames}프레임, 간격: {swap_interval:.2f}ms")
-                
-                if self.presentation:
-                    self.presentation.monitor.simulate_discarded()
-        
-        self._last_swap_time = current_time
     
     def keyPressEvent(self, event):
         """ESC/Q 키로 종료"""
