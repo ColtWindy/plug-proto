@@ -2,6 +2,7 @@
 """
 YOLOE 프롬프트 제어 위젯
 """
+from pathlib import Path
 from PySide6.QtWidgets import (QGroupBox, QVBoxLayout, QHBoxLayout, 
                                 QLineEdit, QPushButton, QLabel)
 from PySide6.QtCore import Signal
@@ -15,7 +16,10 @@ class YOLOEPromptWidget(QGroupBox):
     def __init__(self, default_classes=None, parent=None):
         super().__init__("🎯 YOLOE 프롬프트", parent)
         self.default_classes = default_classes or ["car"]
+        self.prompt_file = Path(__file__).parent.parent.parent / "prompts" / "current.txt"
+        self.prompt_file.parent.mkdir(exist_ok=True)
         self.init_ui()
+        self._load_prompt()  # 시작 시 자동 불러오기
     
     def init_ui(self):
         """UI 초기화"""
@@ -43,32 +47,15 @@ class YOLOEPromptWidget(QGroupBox):
         
         layout.addLayout(input_layout)
         
-        # 프리셋 버튼
-        preset_layout = QHBoxLayout()
-        
-        presets = [
-            ("교통", ["car", "truck", "bus", "motorcycle", "bicycle"]),
-            ("사람", ["person"]),
-            ("동물", ["cat", "dog", "bird"]),
-            ("전체", ["car", "person", "bicycle", "motorcycle"])
-        ]
-        
-        for name, classes in presets:
-            btn = QPushButton(name)
-            btn.clicked.connect(lambda checked, c=classes: self._apply_preset(c))
-            preset_layout.addWidget(btn)
-        
-        layout.addLayout(preset_layout)
-        
         # 도움말
-        help_label = QLabel("💡 예시: car, person, bicycle")
+        help_label = QLabel("💡 예시: car, person, bicycle | 자동 저장됨")
         help_label.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(help_label)
         
         self.setLayout(layout)
     
     def _on_apply(self):
-        """프롬프트 적용"""
+        """프롬프트 적용 + 자동 저장"""
         text = self.input_field.text().strip()
         if not text:
             return
@@ -80,12 +67,8 @@ class YOLOEPromptWidget(QGroupBox):
             return
         
         self._update_current_label(classes)
+        self._save_prompt(classes)  # 자동 저장
         self.prompt_changed.emit(classes)
-    
-    def _apply_preset(self, classes):
-        """프리셋 적용"""
-        self.input_field.setText(", ".join(classes))
-        self._on_apply()
     
     def _update_current_label(self, classes):
         """현재 프롬프트 레이블 업데이트"""
@@ -95,4 +78,40 @@ class YOLOEPromptWidget(QGroupBox):
         """외부에서 클래스 업데이트"""
         self.input_field.setText(", ".join(classes))
         self._update_current_label(classes)
+    
+    def _load_prompt(self):
+        """이전 프롬프트 불러오기"""
+        if not self.prompt_file.exists():
+            return
+        
+        try:
+            with open(self.prompt_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            
+            if not content:
+                return
+            
+            # 여러 줄 또는 쉼표 구분 모두 지원
+            if '\n' in content:
+                # 여러 줄 형식
+                classes = [line.strip() for line in content.split('\n') if line.strip()]
+            else:
+                # 한 줄에 쉼표 구분 형식
+                classes = [c.strip() for c in content.split(',') if c.strip()]
+            
+            if classes:
+                self.input_field.setText(", ".join(classes))
+                self._update_current_label(classes)
+                print(f"✅ 이전 프롬프트 불러오기: {', '.join(classes)}")
+        except Exception:
+            pass
+    
+    def _save_prompt(self, classes):
+        """프롬프트 자동 저장"""
+        try:
+            with open(self.prompt_file, 'w', encoding='utf-8') as f:
+                for cls in classes:
+                    f.write(f"{cls}\n")
+        except Exception:
+            pass
 

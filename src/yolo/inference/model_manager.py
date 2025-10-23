@@ -95,20 +95,15 @@ class BaseModelManager:
     
     def _load_yoloe_model(self, model_path):
         """
-        YOLOE 모델 로드
-        서브클래스에서 필요시 오버라이드
-        
-        Args:
-            model_path: 모델 파일 경로
-        
-        Returns:
-            로드된 YOLO 모델
+        YOLOE 모델 로드 (YOLOEModelManager에서 오버라이드)
         """
         model = YOLO(model_path)
         
         # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
         if self._is_pt_file(model_path) and not self._is_prompt_free(model_path):
-            self._setup_yoloe_prompt(model, ["car"])
+            # 기본 프롬프트 사용
+            default_classes = ["car"]
+            self._setup_yoloe_prompt(model, default_classes)
             print(f"ℹ️ YOLOE (프롬프트 지원)")
         else:
             mode = "prompt-free" if self._is_prompt_free(model_path) else "고정 vocabulary"
@@ -211,7 +206,8 @@ class YOLOEModelManager(BaseModelManager):
     
     def __init__(self, models_dir):
         super().__init__(models_dir)
-        self.current_classes = ["car"]  # 기본 프롬프트
+        self.prompt_file = Path(__file__).parent.parent / "prompts" / "current.txt"
+        self.current_classes = self._load_saved_prompt()  # 저장된 프롬프트 로드
         self.visual_prompt = None  # visual prompt 이미지 경로
     
     @property
@@ -239,8 +235,26 @@ class YOLOEModelManager(BaseModelManager):
         # 첫 번째 모델 로드
         self.current_model = self._load_single_model(str(yoloe_files[0]))
         print(f"✅ 모델: {yoloe_files[0].name}")
+        print(f"✅ 저장된 프롬프트: {', '.join(self.current_classes)}")
         
         return self.current_model, self.model_list
+    
+    def _load_yoloe_model(self, model_path):
+        """
+        YOLOE 모델 로드 (저장된 프롬프트 사용)
+        """
+        model = YOLO(model_path)
+        
+        # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
+        if self._is_pt_file(model_path) and not self._is_prompt_free(model_path):
+            # 저장된 프롬프트 사용
+            self._setup_yoloe_prompt(model, self.current_classes)
+            print(f"ℹ️ YOLOE (프롬프트 지원)")
+        else:
+            mode = "prompt-free" if self._is_prompt_free(model_path) else "고정 vocabulary"
+            print(f"ℹ️ YOLOE ({mode})")
+        
+        return model
     
     def update_prompt(self, classes):
         """
@@ -305,6 +319,30 @@ class YOLOEModelManager(BaseModelManager):
         except Exception as e:
             print(f"❌ Visual prompt 설정 실패: {e}")
             return False
+    
+    def _load_saved_prompt(self):
+        """저장된 프롬프트 불러오기"""
+        if not self.prompt_file.exists():
+            return ["car"]  # 기본값
+        
+        try:
+            with open(self.prompt_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            
+            if not content:
+                return ["car"]
+            
+            # 여러 줄 또는 쉼표 구분 모두 지원
+            if '\n' in content:
+                # 여러 줄 형식
+                classes = [line.strip() for line in content.split('\n') if line.strip()]
+            else:
+                # 한 줄에 쉼표 구분 형식
+                classes = [c.strip() for c in content.split(',') if c.strip()]
+            
+            return classes if classes else ["car"]
+        except Exception:
+            return ["car"]
 
 
 # 하위 호환성을 위한 별칭
