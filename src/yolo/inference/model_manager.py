@@ -7,8 +7,8 @@ from pathlib import Path
 from ultralytics import YOLO
 
 
-class ModelManager:
-    """YOLO 모델 로딩 및 관리"""
+class BaseModelManager:
+    """YOLO 모델 관리 베이스 클래스"""
     
     def __init__(self, models_dir):
         """
@@ -19,6 +19,16 @@ class ModelManager:
         self.current_model = None
         self.model_list = []
     
+    @property
+    def file_extension(self):
+        """서브클래스에서 구현: 파일 확장자"""
+        raise NotImplementedError
+    
+    @property
+    def model_type_name(self):
+        """서브클래스에서 구현: 모델 타입 이름"""
+        raise NotImplementedError
+    
     def load_models(self):
         """
         모델 디렉토리에서 사용 가능한 모델 검색 및 첫 번째 모델 로드
@@ -26,24 +36,20 @@ class ModelManager:
         Returns:
             (model, model_list): 로드된 모델과 전체 모델 리스트
         """
-        # .pt와 .engine 파일 검색 (.pt 우선)
-        pt_files = sorted(self.models_dir.glob("*.pt"))
-        engine_files = sorted(self.models_dir.glob("*.engine"))
-        all_models = pt_files + engine_files
+        model_files = sorted(self.models_dir.glob(f"*{self.file_extension}"))
         
-        if not all_models:
-            print("❌ 모델 파일(.engine/.pt)을 찾을 수 없습니다")
+        if not model_files:
+            print(f"❌ {self.file_extension} 파일을 찾을 수 없습니다")
             return None, []
         
         # 모델 목록 생성
-        self.model_list = [(f.name, str(f)) for f in all_models]
+        self.model_list = [(f.name, str(f)) for f in model_files]
         
-        print(f"📦 발견된 모델: {len(all_models)}개")
-        print(f"  .pt 파일: {len(pt_files)}개, .engine 파일: {len(engine_files)}개")
+        print(f"📦 {self.model_type_name} 모델: {len(model_files)}개")
         
         # 첫 번째 모델 로드
-        self.current_model = self._load_single_model(str(all_models[0]))
-        print(f"✅ 모델: {all_models[0].name}")
+        self.current_model = self._load_single_model(str(model_files[0]))
+        print(f"✅ 모델: {model_files[0].name}")
         
         return self.current_model, self.model_list
     
@@ -64,6 +70,7 @@ class ModelManager:
     def _load_single_model(self, model_path, task=None):
         """
         단일 모델 로드 (YOLOE 자동 처리)
+        서브클래스에서 필요시 오버라이드
         
         Args:
             model_path: 모델 파일 경로
@@ -73,27 +80,39 @@ class ModelManager:
             로드된 YOLO 모델
         """
         model_path = str(model_path)
-        is_engine = model_path.endswith('.engine')
         
         # YOLOE 모델 처리
         if self._is_yoloe_model(model_path):
-            model = YOLO(model_path)  # task 자동 감지
-            
-            # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
-            if self._is_pt_file(model_path) and not self._is_prompt_free(model_path):
-                self._setup_yoloe_prompt(model, ["car"])
-                print(f"ℹ️ YOLOE (프롬프트 지원)")
-            else:
-                mode = "prompt-free" if self._is_prompt_free(model_path) else "TensorRT (고정 vocabulary)"
-                print(f"ℹ️ YOLOE ({mode})")
+            return self._load_yoloe_model(model_path)
+        
+        # 일반 YOLO 모델
+        if task is None:
+            task = self._detect_task(model_path)
+        
+        model = YOLO(model_path, task=task)
+        print(f"✅ {self.model_type_name} 모델 (task={task})")
+        return model
+    
+    def _load_yoloe_model(self, model_path):
+        """
+        YOLOE 모델 로드
+        서브클래스에서 필요시 오버라이드
+        
+        Args:
+            model_path: 모델 파일 경로
+        
+        Returns:
+            로드된 YOLO 모델
+        """
+        model = YOLO(model_path)
+        
+        # .pt 파일 중 prompt-free가 아닌 모델만 프롬프트 지원
+        if self._is_pt_file(model_path) and not self._is_prompt_free(model_path):
+            self._setup_yoloe_prompt(model, ["car"])
+            print(f"ℹ️ YOLOE (프롬프트 지원)")
         else:
-            # 일반 YOLO 모델
-            if task is None:
-                task = self._detect_task(model_path)
-            
-            model = YOLO(model_path, task=task)
-            model_type = "TensorRT" if is_engine else "PyTorch"
-            print(f"✅ {model_type} 모델 (task={task})")
+            mode = "prompt-free" if self._is_prompt_free(model_path) else "고정 vocabulary"
+            print(f"ℹ️ YOLOE ({mode})")
         
         return model
     
@@ -136,21 +155,6 @@ class ModelManager:
         """파일명에서 task 추론"""
         name = Path(model_path).stem.lower()
         
-        # .engine 파일은 기본적으로 detect로 가정 (파일명만으로 정확히 알 수 없음)
-        if model_path.endswith('.engine'):
-            # 파일명에 명확한 키워드가 있는 경우만 감지
-            if 'segment' in name or name.endswith('seg'):
-                return 'segment'
-            elif 'classify' in name or name.endswith('cls'):
-                return 'classify'
-            elif 'pose' in name:
-                return 'pose'
-            elif 'obb' in name:
-                return 'obb'
-            # 기본값: detect
-            return 'detect'
-        
-        # .pt 파일은 좀 더 유연하게 감지
         if 'seg' in name or 'segment' in name:
             return 'segment'
         elif 'cls' in name or 'classify' in name:
@@ -161,4 +165,47 @@ class ModelManager:
             return 'obb'
         
         return 'detect'
+
+
+class PyTorchModelManager(BaseModelManager):
+    """PyTorch 모델 전용 관리자"""
+    
+    @property
+    def file_extension(self):
+        return ".pt"
+    
+    @property
+    def model_type_name(self):
+        return "PyTorch"
+
+
+class TensorRTModelManager(BaseModelManager):
+    """TensorRT 엔진 전용 관리자"""
+    
+    @property
+    def file_extension(self):
+        return ".engine"
+    
+    @property
+    def model_type_name(self):
+        return "TensorRT"
+    
+    def _load_yoloe_model(self, model_path):
+        """
+        TensorRT YOLOE는 프롬프트 변경 불가 (고정 vocabulary)
+        
+        Args:
+            model_path: 모델 파일 경로
+        
+        Returns:
+            로드된 YOLO 모델
+        """
+        model = YOLO(model_path)
+        mode = "prompt-free" if self._is_prompt_free(model_path) else "고정 vocabulary"
+        print(f"ℹ️ YOLOE ({mode})")
+        return model
+
+
+# 하위 호환성을 위한 별칭
+ModelManager = BaseModelManager
 

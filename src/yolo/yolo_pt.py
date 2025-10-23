@@ -9,7 +9,7 @@ from pathlib import Path
 from _lib.wayland_utils import setup_wayland_environment
 from PySide6.QtWidgets import QApplication
 from ui.pytorch_window import PyTorchWindow
-from inference.model_manager import ModelManager
+from inference.model_manager import PyTorchModelManager
 
 def main():
     """PyTorch 모델 테스트"""
@@ -30,20 +30,14 @@ def main():
     app = QApplication(sys.argv)
     print(f"📱 Qt 플랫폼: {app.platformName()}")
     
-    # .pt 파일만 검색
+    # PyTorch 모델 관리자
     models_dir = Path(__file__).parent / "models"
-    pt_files = sorted(models_dir.glob("*.pt"))
+    model_manager = PyTorchModelManager(models_dir)
     
-    if not pt_files:
-        print("❌ .pt 파일이 없습니다")
+    # 모델 자동 로드
+    model, model_list = model_manager.load_models()
+    if model is None:
         sys.exit(1)
-    
-    print(f"📦 PyTorch 모델: {len(pt_files)}개")
-    
-    # 모델 관리자 설정
-    model_manager = ModelManager(models_dir)
-    model_manager.model_list = [(f.name, str(f)) for f in pt_files]
-    model_manager.current_model = model_manager._load_single_model(str(pt_files[0]))
     
     # PyTorch 전용 윈도우 실행
     window = PyTorchWindow(model_manager)

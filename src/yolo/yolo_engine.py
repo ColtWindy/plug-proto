@@ -9,7 +9,7 @@ from pathlib import Path
 from _lib.wayland_utils import setup_wayland_environment
 from PySide6.QtWidgets import QApplication
 from ui.tensorrt_window import TensorRTWindow
-from inference.model_manager import ModelManager
+from inference.model_manager import TensorRTModelManager
 
 
 def main():
@@ -31,20 +31,14 @@ def main():
     app = QApplication(sys.argv)
     print(f"📱 Qt 플랫폼: {app.platformName()}")
     
-    # .engine 파일만 검색
+    # TensorRT 모델 관리자
     models_dir = Path(__file__).parent / "models"
-    engine_files = sorted(models_dir.glob("*.engine"))
+    model_manager = TensorRTModelManager(models_dir)
     
-    if not engine_files:
-        print("❌ .engine 파일이 없습니다")
+    # 모델 자동 로드
+    model, model_list = model_manager.load_models()
+    if model is None:
         sys.exit(1)
-    
-    print(f"📦 TensorRT 엔진: {len(engine_files)}개")
-    
-    # 모델 관리자 설정
-    model_manager = ModelManager(models_dir)
-    model_manager.model_list = [(f.name, str(f)) for f in engine_files]
-    model_manager.current_model = model_manager._load_single_model(str(engine_files[0]))
     
     # TensorRT 전용 윈도우 실행
     window = TensorRTWindow(model_manager)
