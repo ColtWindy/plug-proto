@@ -85,15 +85,35 @@ class YOLOEWindow(QMainWindow):
         panel.setMaximumWidth(350)
         layout = QVBoxLayout()
         
-        # YOLOE 프롬프트 제어 (최상단)
+        # 프롬프트 타입 선택
+        prompt_type_group = QGroupBox("프롬프트 타입")
+        prompt_type_layout = QHBoxLayout()
+        
+        self.prompt_type_group_btn = QButtonGroup()
+        self.text_prompt_radio = QRadioButton("Text")
+        self.text_prompt_radio.setChecked(True)
+        self.visual_prompt_radio = QRadioButton("Visual")
+        
+        self.text_prompt_radio.toggled.connect(self._on_prompt_type_changed)
+        
+        self.prompt_type_group_btn.addButton(self.text_prompt_radio)
+        self.prompt_type_group_btn.addButton(self.visual_prompt_radio)
+        
+        prompt_type_layout.addWidget(self.text_prompt_radio)
+        prompt_type_layout.addWidget(self.visual_prompt_radio)
+        prompt_type_group.setLayout(prompt_type_layout)
+        layout.addWidget(prompt_type_group)
+        
+        # Text Prompt 위젯
         self.prompt_widget = YOLOEPromptWidget(self.model_manager.current_classes)
-        self.prompt_widget.prompt_changed.connect(self._on_prompt_changed)
+        self.prompt_widget.prompt_changed.connect(self._on_text_prompt_changed)
         layout.addWidget(self.prompt_widget)
         
-        # Visual Prompt 제어
+        # Visual Prompt 위젯
         train_images_dir = Path(__file__).parent.parent / "train" / "images"
         self.visual_prompt_widget = VisualPromptWidget(train_images_dir)
-        self.visual_prompt_widget.visual_prompt_changed.connect(self._on_visual_prompt_changed)
+        self.visual_prompt_widget.visual_prompts_loaded.connect(self._on_visual_prompts_loaded)
+        self.visual_prompt_widget.setVisible(False)
         layout.addWidget(self.visual_prompt_widget)
         
         # 모델 정보
@@ -343,32 +363,47 @@ class YOLOEWindow(QMainWindow):
         info_text = self._get_model_info(model, model_path)
         self.model_info_label.setText(info_text)
     
-    def _on_prompt_changed(self, classes):
-        """프롬프트 변경"""
+    def _on_prompt_type_changed(self):
+        """프롬프트 타입 변경"""
+        is_text = self.text_prompt_radio.isChecked()
+        
+        # 위젯 표시/숨김
+        self.prompt_widget.setVisible(is_text)
+        self.visual_prompt_widget.setVisible(not is_text)
+        
+        # 엔진 초기화
+        if is_text:
+            self.inference_engine.visual_prompt = None
+            self.model_manager.set_visual_prompt(None)
+            print("✅ Text prompt 모드")
+        else:
+            # Visual prompt 자동 적용
+            prompts = self.visual_prompt_widget.get_prompts()
+            if prompts:
+                self.model_manager.set_visual_prompt(prompts)
+                self.inference_engine.visual_prompt = prompts
+                print(f"✅ Visual prompt 모드: {len(prompts)}개 레퍼런스")
+        
+        # 일시정지 중이면 재처리
+        if self.is_paused:
+            self._reprocess_current_frame()
+    
+    def _on_text_prompt_changed(self, classes):
+        """Text prompt 변경"""
         success = self.model_manager.update_prompt(classes)
         
         if success:
-            print(f"✅ 프롬프트 업데이트: {', '.join(classes)}")
-            
-            # 실행 중이면 현재 프레임 재처리
-            if self.inference_worker:
-                self._reprocess_current_frame()
-        else:
-            print("❌ 프롬프트 업데이트 실패")
-    
-    def _on_visual_prompt_changed(self, prompt_data):
-        """Visual prompt 변경"""
-        success = self.model_manager.set_visual_prompt(prompt_data)
-        
-        if success:
-            # inference engine에도 적용
-            self.inference_engine.visual_prompt = prompt_data if prompt_data else None
-            
-            # 실행 중이면 현재 프레임 재처리
+            print(f"✅ Text prompt: {', '.join(classes)}")
             if self.is_paused:
                 self._reprocess_current_frame()
-        else:
-            print("❌ Visual prompt 설정 실패")
+    
+    def _on_visual_prompts_loaded(self, prompts):
+        """Visual prompts 로드 완료"""
+        # Visual 모드가 선택되어 있으면 자동 적용
+        if self.visual_prompt_radio.isChecked():
+            self.model_manager.set_visual_prompt(prompts)
+            self.inference_engine.visual_prompt = prompts
+            print(f"✅ Visual prompts 자동 적용: {len(prompts)}개")
     
     def _on_start_camera(self):
         """카메라 시작"""

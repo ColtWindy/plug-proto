@@ -1,134 +1,98 @@
 #coding=utf-8
 """
-Visual Prompt 위젯
-train/images 폴더의 이미지를 visual prompt로 사용
+Visual Prompt 위젯 (간단 버전)
+train 폴더의 모든 이미지를 자동으로 레퍼런스로 사용
 """
 from pathlib import Path
 import numpy as np
 import cv2
-from PySide6.QtWidgets import (QGroupBox, QVBoxLayout, QComboBox, 
-                                QPushButton, QLabel, QHBoxLayout)
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (QGroupBox, QVBoxLayout, QLabel)
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QFont
 
 
 class VisualPromptWidget(QGroupBox):
-    """Visual Prompt 제어 위젯"""
+    """Visual Prompt 정보 표시 위젯"""
     
-    visual_prompt_changed = Signal(dict)  # {image_path, bboxes, cls}
+    visual_prompts_loaded = Signal(list)  # [{image_path, bboxes, cls}, ...]
     
     def __init__(self, train_images_dir):
-        super().__init__("Visual Prompt")
+        super().__init__("Visual Prompt 정보")
         
         self.train_images_dir = Path(train_images_dir)
         self.labels_dir = self.train_images_dir.parent / "labels"
-        self.image_files = self._scan_images()
-        self.current_prompt = None
+        self.prompts = []
         
         self._init_ui()
+        self._load_all_prompts()
     
     def _init_ui(self):
         """UI 초기화"""
         layout = QVBoxLayout()
         
-        # 이미지 선택
-        self.image_combo = QComboBox()
-        self.image_combo.addItem("사용 안 함", "")
-        
-        for img_path in self.image_files:
-            img_name = Path(img_path).name
-            self.image_combo.addItem(img_name, str(img_path))
-        
-        layout.addWidget(QLabel("Reference 이미지:"))
-        layout.addWidget(self.image_combo)
-        
-        # 적용 버튼
-        btn_layout = QHBoxLayout()
-        self.apply_btn = QPushButton("적용")
-        self.apply_btn.clicked.connect(self._on_apply)
-        self.clear_btn = QPushButton("해제")
-        self.clear_btn.clicked.connect(self._on_clear)
-        self.clear_btn.setEnabled(False)
-        
-        btn_layout.addWidget(self.apply_btn)
-        btn_layout.addWidget(self.clear_btn)
-        layout.addLayout(btn_layout)
-        
-        # 프리뷰
-        self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setFixedHeight(100)
-        self.preview_label.setStyleSheet("border: 1px solid gray;")
-        layout.addWidget(self.preview_label)
-        
-        # 상태
-        self.status_label = QLabel("미사용")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("color: gray;")
-        layout.addWidget(self.status_label)
+        # 정보 라벨
+        self.info_label = QLabel("로딩 중...")
+        self.info_label.setWordWrap(True)
+        font = QFont()
+        font.setPointSize(9)
+        self.info_label.setFont(font)
+        layout.addWidget(self.info_label)
         
         self.setLayout(layout)
     
-    def _scan_images(self):
-        """train/images 폴더에서 이미지 스캔"""
+    def _load_all_prompts(self):
+        """모든 train 이미지의 레퍼런스 자동 로드"""
         if not self.train_images_dir.exists():
-            return []
+            self.info_label.setText("❌ train/images 폴더 없음")
+            return
         
         extensions = ['.jpg', '.jpeg', '.png', '.bmp']
-        images = []
+        image_files = []
         for ext in extensions:
-            images.extend(self.train_images_dir.glob(f"*{ext}"))
+            image_files.extend(self.train_images_dir.glob(f"*{ext}"))
         
-        return sorted([str(f) for f in images])
-    
-    def _on_apply(self):
-        """Visual prompt 적용"""
-        image_path = self.image_combo.currentData()
-        
-        if not image_path:
-            self.status_label.setText("이미지를 선택하세요")
+        if not image_files:
+            self.info_label.setText("❌ 이미지 없음")
             return
         
-        # label 파일에서 bbox 정보 읽기
-        bboxes, cls = self._load_bboxes(image_path)
+        # 모든 이미지의 bbox 로드
+        self.prompts = []
+        total_objects = 0
+        all_classes = set()
         
-        if bboxes is None:
-            self.status_label.setText("Label 파일을 찾을 수 없습니다")
-            self.status_label.setStyleSheet("color: red;")
-            return
+        for img_path in sorted(image_files):
+            bboxes, cls = self._load_single_image(img_path)
+            if bboxes is not None:
+                self.prompts.append({
+                    'image_path': str(img_path),
+                    'bboxes': bboxes,
+                    'cls': cls
+                })
+                total_objects += len(bboxes)
+                all_classes.update(cls.tolist())
         
-        self.current_prompt = {
-            'image_path': image_path,
-            'bboxes': bboxes,
-            'cls': cls
-        }
-        
-        self._update_preview(image_path)
-        self.status_label.setText(f"적용됨: {Path(image_path).name} ({len(bboxes)}개)")
-        self.status_label.setStyleSheet("color: green;")
-        self.clear_btn.setEnabled(True)
-        
-        self.visual_prompt_changed.emit(self.current_prompt)
+        # 정보 표시
+        if self.prompts:
+            classes_str = ', '.join(map(str, sorted(all_classes)))
+            info = f"✅ 레퍼런스: {len(self.prompts)}개 이미지\n"
+            info += f"   객체: {total_objects}개\n"
+            info += f"   클래스: [{classes_str}]"
+            self.info_label.setText(info)
+            self.info_label.setStyleSheet("color: green;")
+            
+            # 콘솔 출력
+            print(f"\n📸 Visual Prompt 레퍼런스 로드:")
+            for i, prompt in enumerate(self.prompts):
+                img_name = Path(prompt['image_path']).stem
+                print(f"   [{i}] {img_name}: {len(prompt['bboxes'])}개 객체 (클래스: {set(prompt['cls'])})")
+            
+            # 시그널 발생
+            self.visual_prompts_loaded.emit(self.prompts)
+        else:
+            self.info_label.setText("⚠️ 유효한 레퍼런스 없음")
+            self.info_label.setStyleSheet("color: orange;")
     
-    def _on_clear(self):
-        """Visual prompt 해제"""
-        self.current_prompt = None
-        self.image_combo.setCurrentIndex(0)
-        self.preview_label.clear()
-        self.status_label.setText("미사용")
-        self.status_label.setStyleSheet("color: gray;")
-        self.clear_btn.setEnabled(False)
-        
-        self.visual_prompt_changed.emit({})
-    
-    def _update_preview(self, image_path):
-        """프리뷰 업데이트"""
-        pixmap = QPixmap(image_path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(90, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.preview_label.setPixmap(scaled)
-    
-    def _load_bboxes(self, image_path):
+    def _load_single_image(self, image_path):
         """
         Label 파일에서 bbox 읽기 → 픽셀 좌표로 변환
         
@@ -187,19 +151,13 @@ class VisualPromptWidget(QGroupBox):
             
             bboxes = np.array(bboxes_list, dtype=np.float32)
             cls = np.array(cls_list, dtype=np.int32)
-            
-            print(f"✅ Visual prompt: {len(bboxes)}개 객체 (이미지: {img_w}x{img_h})")
-            print(f"   픽셀 좌표 (xyxy):")
-            for i, (bbox, c) in enumerate(zip(bboxes, cls)):
-                print(f"   [{i}] class={c}, x1={bbox[0]:.1f}, y1={bbox[1]:.1f}, x2={bbox[2]:.1f}, y2={bbox[3]:.1f}")
-            
             return bboxes, cls
             
         except Exception as e:
             print(f"❌ Label 파싱 실패: {e}")
             return None, None
     
-    def get_current_prompt(self):
-        """현재 visual prompt 반환"""
-        return self.current_prompt
+    def get_prompts(self):
+        """모든 visual prompts 반환"""
+        return self.prompts
 

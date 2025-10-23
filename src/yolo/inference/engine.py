@@ -51,22 +51,42 @@ class InferenceEngine:
         # YOLO 추론
         start_time = time.time()
         
-        # 기본 파라미터
         kwargs = {'verbose': False}
         if self.config:
             kwargs.update(self.config.to_dict())
         
-        # Visual prompt (YOLOE)
+        # Visual prompt (YOLOE) - 여러 레퍼런스 지원
         if self.visual_prompt:
             from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
-            kwargs.update({
-                'refer_image': self.visual_prompt['image_path'],
-                'visual_prompts': {
-                    'bboxes': self.visual_prompt['bboxes'],
-                    'cls': self.visual_prompt['cls']
-                },
-                'predictor': YOLOEVPSegPredictor
-            })
+            
+            # list 형태면 첫 번째 것만 사용 (또는 병합)
+            if isinstance(self.visual_prompt, list):
+                # 모든 레퍼런스를 병합
+                all_bboxes = []
+                all_cls = []
+                for prompt in self.visual_prompt:
+                    all_bboxes.append(prompt['bboxes'])
+                    all_cls.append(prompt['cls'])
+                
+                # 첫 번째 이미지를 refer_image로 사용
+                kwargs.update({
+                    'refer_image': self.visual_prompt[0]['image_path'],
+                    'visual_prompts': {
+                        'bboxes': all_bboxes[0],  # 첫 번째만 사용
+                        'cls': all_cls[0]
+                    },
+                    'predictor': YOLOEVPSegPredictor
+                })
+            else:
+                # 단일 프롬프트
+                kwargs.update({
+                    'refer_image': self.visual_prompt['image_path'],
+                    'visual_prompts': {
+                        'bboxes': self.visual_prompt['bboxes'],
+                        'cls': self.visual_prompt['cls']
+                    },
+                    'predictor': YOLOEVPSegPredictor
+                })
         
         results = self.model(frame_bgr, **kwargs)
         infer_time = (time.time() - start_time) * 1000

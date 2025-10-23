@@ -276,7 +276,7 @@ class YOLOEModelManager(BaseModelManager):
         Visual prompt 설정
         
         Args:
-            prompt_data: dict with {image_path, bboxes, cls} or {} to clear
+            prompt_data: list of dicts or single dict or None
         
         Returns:
             성공 여부
@@ -292,9 +292,15 @@ class YOLOEModelManager(BaseModelManager):
         
         try:
             self.visual_prompt = prompt_data
-            image_name = Path(prompt_data['image_path']).name
-            bbox_count = len(prompt_data['bboxes'])
-            print(f"✅ Visual prompt 설정: {image_name} ({bbox_count}개)")
+            
+            if isinstance(prompt_data, list):
+                total = sum(len(p['bboxes']) for p in prompt_data)
+                print(f"✅ Visual prompt: {len(prompt_data)}개 이미지, {total}개 객체")
+            else:
+                image_name = Path(prompt_data['image_path']).name
+                bbox_count = len(prompt_data['bboxes'])
+                print(f"✅ Visual prompt: {image_name} ({bbox_count}개)")
+            
             return True
         except Exception as e:
             print(f"❌ Visual prompt 설정 실패: {e}")
