@@ -212,6 +212,7 @@ class YOLOEModelManager(BaseModelManager):
     def __init__(self, models_dir):
         super().__init__(models_dir)
         self.current_classes = ["car"]  # 기본 프롬프트
+        self.visual_prompt = None  # visual prompt 이미지 경로
     
     @property
     def file_extension(self):
@@ -268,6 +269,35 @@ class YOLOEModelManager(BaseModelManager):
             return True
         except Exception as e:
             print(f"❌ 프롬프트 업데이트 실패: {e}")
+            return False
+    
+    def set_visual_prompt(self, prompt_data):
+        """
+        Visual prompt 설정
+        
+        Args:
+            prompt_data: dict with {image_path, bboxes, cls} or {} to clear
+        
+        Returns:
+            성공 여부
+        """
+        if not self.current_model:
+            print("❌ 모델이 로드되지 않았습니다")
+            return False
+        
+        if not prompt_data:
+            self.visual_prompt = None
+            print("✅ Visual prompt 해제")
+            return True
+        
+        try:
+            self.visual_prompt = prompt_data
+            image_name = Path(prompt_data['image_path']).name
+            bbox_count = len(prompt_data['bboxes'])
+            print(f"✅ Visual prompt 설정: {image_name} ({bbox_count}개)")
+            return True
+        except Exception as e:
+            print(f"❌ Visual prompt 설정 실패: {e}")
             return False
 
 

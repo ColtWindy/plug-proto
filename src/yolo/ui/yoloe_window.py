@@ -15,6 +15,7 @@ from ui.widgets.camera_control_widget import CameraControlWidget
 from ui.widgets.video_control_widget import VideoControlWidget
 from ui.widgets.inference_config_widget import InferenceConfigWidget
 from ui.widgets.yoloe_prompt_widget import YOLOEPromptWidget
+from ui.widgets.visual_prompt_widget import VisualPromptWidget
 from inference.engine import InferenceEngine
 from inference.worker import InferenceWorker
 from inference.config import PTConfig
@@ -88,6 +89,12 @@ class YOLOEWindow(QMainWindow):
         self.prompt_widget = YOLOEPromptWidget(self.model_manager.current_classes)
         self.prompt_widget.prompt_changed.connect(self._on_prompt_changed)
         layout.addWidget(self.prompt_widget)
+        
+        # Visual Prompt 제어
+        train_images_dir = Path(__file__).parent.parent / "train" / "images"
+        self.visual_prompt_widget = VisualPromptWidget(train_images_dir)
+        self.visual_prompt_widget.visual_prompt_changed.connect(self._on_visual_prompt_changed)
+        layout.addWidget(self.visual_prompt_widget)
         
         # 모델 정보
         layout.addWidget(self._create_model_info())
@@ -348,6 +355,20 @@ class YOLOEWindow(QMainWindow):
                 self._reprocess_current_frame()
         else:
             print("❌ 프롬프트 업데이트 실패")
+    
+    def _on_visual_prompt_changed(self, prompt_data):
+        """Visual prompt 변경"""
+        success = self.model_manager.set_visual_prompt(prompt_data)
+        
+        if success:
+            # inference engine에도 적용
+            self.inference_engine.visual_prompt = prompt_data if prompt_data else None
+            
+            # 실행 중이면 현재 프레임 재처리
+            if self.is_paused:
+                self._reprocess_current_frame()
+        else:
+            print("❌ Visual prompt 설정 실패")
     
     def _on_start_camera(self):
         """카메라 시작"""

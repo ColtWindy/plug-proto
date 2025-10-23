@@ -23,6 +23,7 @@ class InferenceEngine:
         self.model_path = model_path
         self.is_engine = model_path and model_path.endswith('.engine') if model_path else False
         self.config = config
+        self.visual_prompt = None  # visual prompt 이미지 경로
         
         # FPS 계산
         self.fps_start_time = time.time()
@@ -47,13 +48,28 @@ class InferenceEngine:
         # FPS 업데이트
         self._update_fps()
         
-        # YOLO 추론 (config 파라미터 적용)
+        # YOLO 추론
         start_time = time.time()
+        
+        # 기본 파라미터
+        kwargs = {'verbose': False}
         if self.config:
-            results = self.model(frame_bgr, **self.config.to_dict())
-        else:
-            results = self.model(frame_bgr, verbose=False)
-        infer_time = (time.time() - start_time) * 1000  # ms
+            kwargs.update(self.config.to_dict())
+        
+        # Visual prompt (YOLOE)
+        if self.visual_prompt:
+            from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
+            kwargs.update({
+                'refer_image': self.visual_prompt['image_path'],
+                'visual_prompts': {
+                    'bboxes': self.visual_prompt['bboxes'],
+                    'cls': self.visual_prompt['cls']
+                },
+                'predictor': YOLOEVPSegPredictor
+            })
+        
+        results = self.model(frame_bgr, **kwargs)
+        infer_time = (time.time() - start_time) * 1000
         
         # 추론 시간 통계
         self._update_infer_stats(infer_time)
