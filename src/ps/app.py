@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QWidget,
                                 QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy)
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage
-from PySide6.QtCore import Qt, QDateTime
+from PySide6.QtCore import Qt
 from OpenGL import GL
 
 from opengl_example.camera_controller import OpenGLCameraController
