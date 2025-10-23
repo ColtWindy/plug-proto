@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QApplication
 from ui.pytorch_window import PyTorchWindow
 from inference.model_manager import ModelManager
 
-
 def main():
     """PyTorch 모델 테스트"""
     # Wayland 환경 설정
