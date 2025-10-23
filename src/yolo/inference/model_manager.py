@@ -206,6 +206,71 @@ class TensorRTModelManager(BaseModelManager):
         return model
 
 
+class YOLOEModelManager(BaseModelManager):
+    """YOLOE 모델 전용 관리자 (프롬프트 제어 가능)"""
+    
+    def __init__(self, models_dir):
+        super().__init__(models_dir)
+        self.current_classes = ["car"]  # 기본 프롬프트
+    
+    @property
+    def file_extension(self):
+        return ".pt"
+    
+    @property
+    def model_type_name(self):
+        return "YOLOE"
+    
+    def load_models(self):
+        """YOLOE 모델만 검색"""
+        model_files = sorted(self.models_dir.glob(f"*{self.file_extension}"))
+        yoloe_files = [f for f in model_files if self._is_yoloe_model(str(f))]
+        
+        if not yoloe_files:
+            print(f"❌ YOLOE {self.file_extension} 파일을 찾을 수 없습니다")
+            return None, []
+        
+        # 모델 목록 생성
+        self.model_list = [(f.name, str(f)) for f in yoloe_files]
+        
+        print(f"📦 {self.model_type_name} 모델: {len(yoloe_files)}개")
+        
+        # 첫 번째 모델 로드
+        self.current_model = self._load_single_model(str(yoloe_files[0]))
+        print(f"✅ 모델: {yoloe_files[0].name}")
+        
+        return self.current_model, self.model_list
+    
+    def update_prompt(self, classes):
+        """
+        프롬프트 업데이트 (런타임에 변경 가능)
+        
+        Args:
+            classes: 클래스 리스트 (예: ["car", "person"])
+        
+        Returns:
+            성공 여부
+        """
+        if not self.current_model:
+            print("❌ 모델이 로드되지 않았습니다")
+            return False
+        
+        # prompt-free 모델은 프롬프트 변경 불가
+        if hasattr(self.current_model, 'model') and hasattr(self.current_model.model, 'model'):
+            model_path = getattr(self.current_model, 'ckpt_path', '')
+            if self._is_prompt_free(model_path):
+                print("⚠️ Prompt-free 모델은 프롬프트 변경이 불가능합니다")
+                return False
+        
+        try:
+            self._setup_yoloe_prompt(self.current_model, classes)
+            self.current_classes = classes
+            return True
+        except Exception as e:
+            print(f"❌ 프롬프트 업데이트 실패: {e}")
+            return False
+
+
 # 하위 호환성을 위한 별칭
 ModelManager = BaseModelManager
 
