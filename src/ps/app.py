@@ -13,7 +13,7 @@ import numpy as np
 from pathlib import Path
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QWidget, 
-                                QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy)
+                                QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy, QComboBox)
 from PySide6.QtOpenGL import QOpenGLWindow
 from PySide6.QtGui import QSurfaceFormat, QPainter, QFont, QColor, QPen, QPixmap, QImage
 from PySide6.QtCore import Qt
@@ -23,9 +23,9 @@ from opengl_example.camera_controller import OpenGLCameraController
 from _lib import mvsdk
 from _lib.wayland_utils import setup_wayland_environment
 from config import CAMERA_IP
-from yolo.inference.model_manager import ModelManager
+from yolo.inference.model_manager import YOLOEModelManager
 from yolo.inference.engine import InferenceEngine
-from yolo.inference.config import EngineConfig
+from yolo.inference.config import PTConfig
 from ps.yolo_renderer import CustomYOLORenderer
 
 
@@ -234,10 +234,10 @@ class MainWindow(QMainWindow):
         self.exposure_time_ms = self.DEFAULT_EXPOSURE_MS
         self.vsync_delay_ms = self.DEFAULT_VSYNC_DELAY_MS
         
-        self.setWindowTitle("OpenGL Camera - YOLO")
+        self.setWindowTitle("OpenGL Camera - YOLOE")
         
         # YOLO 초기화
-        self.inference_engine, self.yolo_renderer = self._init_yolo_model()
+        self.model_manager, self.inference_engine, self.yolo_renderer = self._init_yolo_model()
         
         # OpenGL 윈도우 생성
         self.opengl_window = CameraOpenGLWindow(
@@ -268,41 +268,51 @@ class MainWindow(QMainWindow):
         self._setup_controls(main_layout)
     
     def _init_yolo_model(self):
-        """YOLO 모델 및 렌더러 초기화"""
+        """YOLOE 모델 및 렌더러 초기화"""
         try:
             models_dir = Path(__file__).parent.parent / "yolo" / "models"
             if not models_dir.exists():
                 print("⚠️ YOLO 모델 디렉토리 없음 - YOLO 비활성화")
-                return None, None
+                return None, None, None
             
-            engine_files = sorted(models_dir.glob("*.engine"))
-            if not engine_files:
-                print("⚠️ .engine 파일 없음 - YOLO 비활성화")
-                return None, None
+            # YOLOE 모델 관리자
+            model_manager = YOLOEModelManager(models_dir)
+            model, model_list = model_manager.load_models()
             
-            model_manager = ModelManager(models_dir)
-            model_manager.model_list = [(f.name, str(f)) for f in engine_files]
-            model_manager.current_model = model_manager._load_single_model(str(engine_files[0]))
+            if model is None:
+                print("⚠️ YOLOE .pt 파일 없음 - YOLO 비활성화")
+                return None, None, None
             
+            # 프롬프트 하드코딩 (current.txt 내용)
+            prompts = ["black steel cup", "bright paper towel", "white paper cup", "paper bottle with text"]
+            model_manager.update_prompt(prompts)
+            
+            # 추론 엔진
             inference_engine = InferenceEngine(
-                model_manager.current_model,
-                str(engine_files[0]),
-                EngineConfig()
+                model,
+                model_list[0][1] if model_list else None,
+                PTConfig()
             )
             
-            yolo_renderer = CustomYOLORenderer(model_manager.current_model)
+            # 렌더러
+            yolo_renderer = CustomYOLORenderer(model)
             
-            print(f"✅ YOLO 모델 로드: {engine_files[0].name}")
-            return inference_engine, yolo_renderer
+            print(f"✅ YOLOE 모델 로드: {Path(model_list[0][1]).name}")
+            print(f"✅ 프롬프트: {', '.join(prompts)}")
+            return model_manager, inference_engine, yolo_renderer
         except Exception as e:
-            print(f"⚠️ YOLO 초기화 실패: {e} - YOLO 비활성화")
-            return None, None
+            print(f"⚠️ YOLOE 초기화 실패: {e} - YOLO 비활성화")
+            return None, None, None
 
     def _setup_controls(self, parent_layout):
         """컨트롤 패널 설정"""
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
         controls.setMaximumHeight(self.CONTROL_PANEL_HEIGHT)
+        
+        # 모델 선택 드롭다운
+        if self.model_manager:
+            self._create_model_selector(controls_layout)
         
         # 토글 버튼
         self._create_toggle_buttons(controls_layout)
@@ -315,6 +325,19 @@ class MainWindow(QMainWindow):
                            self.on_delay_change, "ms")
         
         parent_layout.addWidget(controls)
+    
+    def _create_model_selector(self, layout):
+        """모델 선택 드롭다운 생성"""
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(QLabel("모델:"))
+        
+        self.model_combo = QComboBox()
+        for model_name, model_path in self.model_manager.model_list:
+            self.model_combo.addItem(model_name, model_path)
+        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
+        model_layout.addWidget(self.model_combo)
+        
+        layout.addLayout(model_layout)
     
     def _create_toggle_buttons(self, layout):
         """토글 버튼 생성"""
@@ -413,6 +436,36 @@ class MainWindow(QMainWindow):
             self.camera_feed_btn.setText(f"촬영화면: {status}")
             self.opengl_window._cache_key = None
             print(f"{'✅' if self.yolo_renderer.draw_camera_feed else '❌'} 촬영화면")
+    
+    def on_model_changed(self, index):
+        """모델 변경"""
+        if index < 0 or not self.model_manager:
+            return
+        
+        model_path = self.model_combo.itemData(index)
+        if not model_path:
+            return
+        
+        # 모델 전환
+        new_model = self.model_manager.switch_model(model_path)
+        
+        # 프롬프트 재설정
+        prompts = ["black steel cup", "bright paper towel", "white paper cup", "paper bottle with text"]
+        self.model_manager.update_prompt(prompts)
+        
+        # 추론 엔진 업데이트
+        self.inference_engine.model = new_model
+        self.inference_engine.model_path = model_path
+        self.inference_engine.is_engine = False
+        
+        # 렌더러 업데이트
+        self.yolo_renderer.model = new_model
+        
+        # 캐시 초기화
+        self.opengl_window._cache_key = None
+        
+        print(f"✅ 모델 변경: {Path(model_path).name}")
+        print(f"✅ 프롬프트: {', '.join(prompts)}")
     
     def on_gain_change(self, value):
         """게인 변경"""
