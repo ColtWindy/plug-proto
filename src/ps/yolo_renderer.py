@@ -53,6 +53,9 @@ class CustomYOLORenderer:
             conf = float(box.conf[0])
             cls = int(box.cls[0])
             
+            # Tracking ID (ByteTrack)
+            track_id = int(box.id[0]) if hasattr(box, 'id') and box.id is not None else None
+            
             # 클래스명 및 색상
             class_name = self.model.names[cls] if hasattr(self.model, 'names') else f"class_{cls}"
             color = self._get_class_color(cls)
@@ -61,7 +64,12 @@ class CustomYOLORenderer:
             if self.draw_boxes:
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 
-                label = f"{class_name} {conf:.2f}"
+                # 라벨에 tracking ID 추가
+                if track_id is not None:
+                    label = f"ID:{track_id} {class_name} {conf:.2f}"
+                else:
+                    label = f"{class_name} {conf:.2f}"
+                
                 (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
                 cv2.rectangle(annotated, (x1, y1 - label_h - 4), (x1 + label_w, y1), color, -1)
                 cv2.putText(annotated, label, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)

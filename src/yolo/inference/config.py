@@ -34,6 +34,8 @@ class PTConfig:
     agnostic_nms: bool = False  # 클래스 구분 없이 모든 박스를 한 바구니에 넣고 NMS. 점수 높은 박스 하나만 남기고, 다른 클래스라도 많이 겹치면 제거.
     imgsz: int = 640            # input image size
     augment: bool = False       # test-time augmentation
+    tracker: str = "bytetrack.yaml"  # object tracking
+    persist: bool = True        # persist tracking results
     
     def to_dict(self):
         return {
@@ -43,6 +45,8 @@ class PTConfig:
             'agnostic_nms': self.agnostic_nms,
             'imgsz': self.imgsz,
             'augment': self.augment,
+            'tracker': self.tracker,
+            'persist': self.persist,
             'verbose': False
         }
 

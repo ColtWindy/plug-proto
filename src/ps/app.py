@@ -151,21 +151,21 @@ class CameraOpenGLWindow(QOpenGLWindow):
             self._cache_key = None
     
     def _perform_yolo_inference(self):
-        """YOLO 추론 수행"""
+        """YOLO 추론 수행 (ByteTrack 추적)"""
         if not (self.current_frame_bgr is not None and self.inference_engine and self.yolo_renderer):
             return self.current_pixmap
         
         try:
             start_time = time.time()
             
-            # 추론 실행
+            # 추론 실행 (ByteTrack 사용)
             if self.inference_engine.config:
-                results = self.inference_engine.model(
+                results = self.inference_engine.model.track(
                     self.current_frame_bgr, 
                     **self.inference_engine.config.to_dict()
                 )
             else:
-                results = self.inference_engine.model(self.current_frame_bgr, verbose=False)
+                results = self.inference_engine.model.track(self.current_frame_bgr, verbose=False)
             
             infer_time = (time.time() - start_time) * 1000
             
@@ -566,11 +566,12 @@ class MainWindow(QMainWindow):
                        "transparent plastic bottle"]
             model_manager.update_prompt(prompts)
             
-            # 추론 엔진
+            # 추론 엔진 (ByteTrack 활성화)
+            config = PTConfig()
             inference_engine = InferenceEngine(
                 model,
                 model_list[0][1] if model_list else None,
-                PTConfig()
+                config
             )
             
             # 렌더러
@@ -578,6 +579,7 @@ class MainWindow(QMainWindow):
             
             print(f"✅ YOLOE 모델 로드: {Path(model_list[0][1]).name}")
             print(f"✅ 프롬프트: {', '.join(prompts)}")
+            print(f"✅ ByteTrack 활성화 (persist={config.persist})")
             return model_manager, inference_engine, yolo_renderer
         except Exception as e:
             print(f"⚠️ YOLOE 초기화 실패: {e} - YOLO 비활성화")
@@ -742,7 +744,12 @@ class MainWindow(QMainWindow):
         new_model = self.model_manager.switch_model(model_path)
         
         # 프롬프트 재설정
-        prompts = ["black steel cup", "bright paper towel", "white paper cup", "paper bottle with text"]
+        prompts = ["black steel cup", 
+                   "bright paper towel", 
+                   "white paper cup", 
+                   "paper bottle with text",
+                   "white paper cup with text",
+                   "transparent plastic bottle"]
         self.model_manager.update_prompt(prompts)
         
         # 추론 엔진 업데이트
