@@ -23,12 +23,27 @@ from OpenGL import GL
 from opengl_example.camera_controller import OpenGLCameraController
 from _lib import mvsdk
 from _lib.wayland_utils import setup_wayland_environment
-from config import CAMERA_IP
 from yolo.inference.model_manager import YOLOEModelManager
 from yolo.inference.engine import InferenceEngine
-from yolo.inference.config import PTConfig
 from ps.yolo_renderer import CustomYOLORenderer
 
+
+# ==================== 전용 Config ====================
+# 카메라 설정
+CAMERA_IP = "192.168.0.100"
+
+# YOLO 프롬프트 (탐지할 객체)
+YOLO_PROMPTS = [
+    "cup", "square", "bottle", "white paper cup", "paper bottle with text", 
+    "white paper cup with text", "transparent plastic bottle", "carton box", "square box",
+    "plastic bag", "paper bag", "plastic bottle", "paper bottle", "plastic cup", "paper cup",
+    ]
+
+# YOLO 추론 설정 (ID 일관성 우선)
+YOLO_CONF = 0.15        # 낮은 신뢰도로 지속 탐지
+YOLO_IOU = 0.5          # 겹침 허용도
+YOLO_MAX_DET = 50      # 최대 탐지 수
+YOLO_IMGSZ = 640        # 입력 이미지 크기
 
 # 상수 정의
 BUSY_WAIT_THRESHOLD_MS = 0.001
@@ -158,21 +173,19 @@ class CameraOpenGLWindow(QOpenGLWindow):
         try:
             start_time = time.time()
             
-            # 추론 실행 (ByteTrack 사용)
-            if self.inference_engine.config:
-                results = self.inference_engine.model.track(
-                    self.current_frame_bgr, 
-                    **self.inference_engine.config.to_dict()
-                )
-            else:
-                results = self.inference_engine.model.track(self.current_frame_bgr, verbose=False)
+            # 추론 실행 (설정 + ByteTrack)
+            results = self.inference_engine.model.track(
+                self.current_frame_bgr,
+                persist=True,
+                **self.inference_engine.config.to_dict()
+            )
             
             infer_time = (time.time() - start_time) * 1000
             
             # 결과 처리
             result = self._extract_result(results)
             
-            # 커스텀 렌더링
+            # 렌더링
             q_image = self.yolo_renderer.render(self.current_frame_bgr, result)
             
             # 통계 업데이트
@@ -557,29 +570,33 @@ class MainWindow(QMainWindow):
                 print("⚠️ YOLOE .pt 파일 없음 - YOLO 비활성화")
                 return None, None, None
             
-            # 프롬프트 하드코딩 (current.txt 내용)
-            prompts = ["black steel cup", 
-                       "bright paper towel", 
-                       "white paper cup", 
-                       "paper bottle with text",
-                       "white paper cup with text",
-                       "transparent plastic bottle"]
-            model_manager.update_prompt(prompts)
+            # 프롬프트 설정
+            model_manager.update_prompt(YOLO_PROMPTS)
             
-            # 추론 엔진 (ByteTrack 활성화)
-            config = PTConfig()
+            # 추론 설정 객체 생성 (간단한 클래스)
+            class YOLOConfig:
+                def to_dict(self):
+                    return {
+                        'conf': YOLO_CONF,
+                        'iou': YOLO_IOU,
+                        'max_det': YOLO_MAX_DET,
+                        'imgsz': YOLO_IMGSZ,
+                        'verbose': False
+                    }
+            
+            # 추론 엔진
             inference_engine = InferenceEngine(
                 model,
                 model_list[0][1] if model_list else None,
-                config
+                YOLOConfig()
             )
             
             # 렌더러
             yolo_renderer = CustomYOLORenderer(model)
             
             print(f"✅ YOLOE 모델 로드: {Path(model_list[0][1]).name}")
-            print(f"✅ 프롬프트: {', '.join(prompts)}")
-            print(f"✅ ByteTrack 활성화 (persist={config.persist})")
+            print(f"✅ 프롬프트: {', '.join(YOLO_PROMPTS)}")
+            print(f"✅ ByteTrack (conf={YOLO_CONF}, iou={YOLO_IOU}, ID 일관성 우선)")
             return model_manager, inference_engine, yolo_renderer
         except Exception as e:
             print(f"⚠️ YOLOE 초기화 실패: {e} - YOLO 비활성화")
@@ -744,13 +761,7 @@ class MainWindow(QMainWindow):
         new_model = self.model_manager.switch_model(model_path)
         
         # 프롬프트 재설정
-        prompts = ["black steel cup", 
-                   "bright paper towel", 
-                   "white paper cup", 
-                   "paper bottle with text",
-                   "white paper cup with text",
-                   "transparent plastic bottle"]
-        self.model_manager.update_prompt(prompts)
+        self.model_manager.update_prompt(YOLO_PROMPTS)
         
         # 추론 엔진 업데이트
         self.inference_engine.model = new_model
@@ -764,7 +775,7 @@ class MainWindow(QMainWindow):
         self.opengl_window._cache_key = None
         
         print(f"✅ 모델 변경: {Path(model_path).name}")
-        print(f"✅ 프롬프트: {', '.join(prompts)}")
+        print(f"✅ 프롬프트: {', '.join(YOLO_PROMPTS)}")
     
     def on_gain_change(self, value):
         """게인 변경"""
