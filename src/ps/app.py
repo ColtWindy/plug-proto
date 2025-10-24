@@ -10,6 +10,7 @@ import time
 import threading
 import cv2
 import numpy as np
+import json
 from pathlib import Path
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QWidget, 
@@ -50,6 +51,7 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.current_pixmap = None
         self.pending_pixmap = None
         self.current_frame_bgr = None
+        self.original_frame_bgr = None  # 호모그래피 적용 전 원본
         self._frame = 0
         self.show_black = True
         
@@ -65,6 +67,13 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.last_infer_time = 0.0
         self.avg_infer_time = 0.0
         self.detected_count = 0
+        
+        # 호모그래피 핸들 (4개 모서리)
+        self.homography_enabled = True
+        self.show_handles = True  # 핸들 표시 여부
+        self.homography_handles = None  # 초기화는 첫 프레임에서
+        self.dragging_handle = None
+        self.handle_radius = 10
         
         # frameSwapped 시그널 연결
         self.frameSwapped.connect(self.on_frame_swapped, Qt.QueuedConnection)
@@ -90,6 +99,11 @@ class CameraOpenGLWindow(QOpenGLWindow):
     def _render_black_screen(self):
         """검은 화면 렌더링"""
         painter = QPainter(self)
+        
+        # 호모그래피 핸들 그리기 (항상 표시)
+        if self.show_handles and self.homography_handles is not None:
+            self._draw_homography_handles(painter)
+        
         painter.setFont(self._info_font)
         painter.setPen(self._info_pen)
         
@@ -111,6 +125,10 @@ class CameraOpenGLWindow(QOpenGLWindow):
         
         if display_pixmap and not display_pixmap.isNull():
             self._draw_scaled_pixmap(painter, display_pixmap)
+        
+        # 호모그래피 핸들 그리기
+        if self.show_handles and self.homography_handles is not None:
+            self._draw_homography_handles(painter)
         
         # 정보 텍스트 표시
         painter.setFont(self._info_font)
@@ -196,9 +214,212 @@ class CameraOpenGLWindow(QOpenGLWindow):
         if q_image is None or q_image.isNull():
             self.pending_pixmap = None
             self.current_frame_bgr = None
+            self.original_frame_bgr = None
         else:
-            self.pending_pixmap = QPixmap.fromImage(q_image)
-            self.current_frame_bgr = frame_bgr
+            # 원본 프레임 저장
+            self.original_frame_bgr = frame_bgr
+            
+            # 호모그래피 핸들 초기화 (첫 프레임)
+            if self.homography_handles is None and frame_bgr is not None:
+                self._init_homography_handles(frame_bgr.shape[1], frame_bgr.shape[0])
+            
+            # 호모그래피 변환 적용
+            if self.homography_enabled and frame_bgr is not None:
+                transformed_bgr = self._apply_homography(frame_bgr)
+                transformed_q_image = self._bgr_to_qimage(transformed_bgr)
+                self.pending_pixmap = QPixmap.fromImage(transformed_q_image)
+                self.current_frame_bgr = transformed_bgr
+            else:
+                self.pending_pixmap = QPixmap.fromImage(q_image)
+                self.current_frame_bgr = frame_bgr
+    
+    def _init_homography_handles(self, width, height):
+        """호모그래피 핸들 초기화 (이미지 크기 기준)"""
+        # 저장된 핸들 위치가 있으면 로드
+        settings_file = Path(__file__).parent / "settings.json"
+        if settings_file.exists():
+            try:
+                with open(settings_file, 'r') as f:
+                    data = json.load(f)
+                    homography = data.get('homography', {})
+                    if homography.get('width') == width and homography.get('height') == height:
+                        self.homography_handles = np.float32(homography['handles'])
+                        self.show_handles = homography.get('show_handles', True)
+                        print(f"✅ 호모그래피 핸들 로드: {width}x{height}")
+                        return
+            except Exception as e:
+                print(f"⚠️ 설정 로드 실패: {e}")
+        
+        # 기본값으로 초기화
+        margin = 50
+        self.homography_handles = np.float32([
+            [margin, margin],                    # 좌상단
+            [width - margin, margin],            # 우상단
+            [width - margin, height - margin],   # 우하단
+            [margin, height - margin]            # 좌하단
+        ])
+        print(f"✅ 호모그래피 핸들 초기화: {width}x{height}")
+    
+    def _apply_homography(self, frame_bgr):
+        """호모그래피 변환 적용"""
+        if self.homography_handles is None:
+            return frame_bgr
+        
+        h, w = frame_bgr.shape[:2]
+        
+        # 소스 포인트 (핸들 위치)
+        src_points = self.homography_handles
+        
+        # 목적지 포인트 (전체 이미지)
+        dst_points = np.float32([
+            [0, 0],
+            [w, 0],
+            [w, h],
+            [0, h]
+        ])
+        
+        # 호모그래피 행렬 계산
+        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+        
+        # 변환 적용
+        warped = cv2.warpPerspective(frame_bgr, matrix, (w, h))
+        return warped
+    
+    def _bgr_to_qimage(self, frame_bgr):
+        """BGR 프레임을 QImage로 변환"""
+        h, w = frame_bgr.shape[:2]
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        return QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888)
+    
+    def _draw_homography_handles(self, painter):
+        """호모그래피 핸들 그리기"""
+        if self.homography_handles is None:
+            return
+        
+        # 이미지 좌표를 화면 좌표로 변환
+        screen_handles = self._image_to_screen_coords(self.homography_handles)
+        
+        # 핸들 연결선 그리기
+        painter.setPen(QPen(QColor(255, 255, 0), 2))
+        for i in range(4):
+            start = screen_handles[i]
+            end = screen_handles[(i + 1) % 4]
+            painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
+        
+        # 핸들 원 그리기
+        for i, handle in enumerate(screen_handles):
+            if self.dragging_handle == i:
+                painter.setBrush(QColor(255, 0, 0, 180))
+            else:
+                painter.setBrush(QColor(255, 255, 0, 180))
+            painter.setPen(QPen(QColor(255, 255, 255), 2))
+            painter.drawEllipse(int(handle[0] - self.handle_radius), 
+                              int(handle[1] - self.handle_radius),
+                              self.handle_radius * 2, 
+                              self.handle_radius * 2)
+    
+    def _image_to_screen_coords(self, image_points):
+        """이미지 좌표를 화면 좌표로 변환"""
+        if self.original_frame_bgr is None:
+            return image_points
+        
+        img_h, img_w = self.original_frame_bgr.shape[:2]
+        screen_w, screen_h = self.width(), self.height()
+        
+        # 종횡비 유지하며 스케일 계산
+        scale = min(screen_w / img_w, screen_h / img_h)
+        scaled_w = int(img_w * scale)
+        scaled_h = int(img_h * scale)
+        
+        # 센터링 오프셋
+        offset_x = (screen_w - scaled_w) // 2
+        offset_y = (screen_h - scaled_h) // 2
+        
+        # 변환
+        screen_points = []
+        for pt in image_points:
+            x = pt[0] * scale + offset_x
+            y = pt[1] * scale + offset_y
+            screen_points.append([x, y])
+        
+        return np.array(screen_points, dtype=np.float32)
+    
+    def _screen_to_image_coords(self, screen_x, screen_y):
+        """화면 좌표를 이미지 좌표로 변환"""
+        if self.original_frame_bgr is None:
+            return screen_x, screen_y
+        
+        img_h, img_w = self.original_frame_bgr.shape[:2]
+        screen_w, screen_h = self.width(), self.height()
+        
+        # 종횡비 유지하며 스케일 계산
+        scale = min(screen_w / img_w, screen_h / img_h)
+        scaled_w = int(img_w * scale)
+        scaled_h = int(img_h * scale)
+        
+        # 센터링 오프셋
+        offset_x = (screen_w - scaled_w) // 2
+        offset_y = (screen_h - scaled_h) // 2
+        
+        # 역변환
+        img_x = (screen_x - offset_x) / scale
+        img_y = (screen_y - offset_y) / scale
+        
+        return img_x, img_y
+    
+    def _find_handle_at_pos(self, x, y):
+        """주어진 화면 좌표에 있는 핸들 찾기"""
+        if self.homography_handles is None:
+            return None
+        
+        screen_handles = self._image_to_screen_coords(self.homography_handles)
+        
+        for i, handle in enumerate(screen_handles):
+            dist = np.sqrt((handle[0] - x)**2 + (handle[1] - y)**2)
+            if dist <= self.handle_radius:
+                return i
+        
+        return None
+    
+    def mousePressEvent(self, event):
+        """마우스 클릭 이벤트"""
+        if event.button() == Qt.LeftButton and self.show_handles:
+            x, y = event.position().x(), event.position().y()
+            self.dragging_handle = self._find_handle_at_pos(x, y)
+            if self.dragging_handle is not None:
+                event.accept()
+                return
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        """마우스 이동 이벤트"""
+        if self.dragging_handle is not None and self.homography_enabled:
+            x, y = event.position().x(), event.position().y()
+            img_x, img_y = self._screen_to_image_coords(x, y)
+            
+            # 핸들 위치 업데이트
+            self.homography_handles[self.dragging_handle] = [img_x, img_y]
+            
+            # 원본 프레임으로 다시 변환
+            if self.original_frame_bgr is not None:
+                transformed_bgr = self._apply_homography(self.original_frame_bgr)
+                self.current_frame_bgr = transformed_bgr
+                transformed_q_image = self._bgr_to_qimage(transformed_bgr)
+                self.current_pixmap = QPixmap.fromImage(transformed_q_image)
+                self._cache_key = None
+            
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """마우스 릴리즈 이벤트"""
+        if event.button() == Qt.LeftButton and self.dragging_handle is not None:
+            self.dragging_handle = None
+            self.save_settings()  # 변경 시 자동 저장
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
     
     def on_frame_swapped(self):
         """frameSwapped 시그널 처리"""
@@ -211,10 +432,54 @@ class CameraOpenGLWindow(QOpenGLWindow):
         self.show_black = not self.show_black
         self.update()
     
+    def save_settings(self):
+        """설정 자동 저장"""
+        if self.homography_handles is None or self.original_frame_bgr is None:
+            return
+        
+        h, w = self.original_frame_bgr.shape[:2]
+        settings_file = Path(__file__).parent / "settings.json"
+        
+        try:
+            # 기존 설정 읽기 (있으면)
+            data = {}
+            if settings_file.exists():
+                with open(settings_file, 'r') as f:
+                    data = json.load(f)
+            
+            # 호모그래피 설정 업데이트
+            data['homography'] = {
+                'width': w,
+                'height': h,
+                'handles': self.homography_handles.tolist(),
+                'show_handles': self.show_handles
+            }
+            
+            # 저장
+            with open(settings_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"❌ 설정 저장 실패: {e}")
+    
     def keyPressEvent(self, event):
-        """ESC/Q 키로 종료"""
+        """키보드 이벤트"""
+        # ESC/Q: 종료
         if event.key() in (Qt.Key_Escape, Qt.Key_Q):
             self.close()
+        # R: 호모그래피 핸들 리셋
+        elif event.key() == Qt.Key_R:
+            if self.original_frame_bgr is not None:
+                h, w = self.original_frame_bgr.shape[:2]
+                margin = 50
+                self.homography_handles = np.float32([
+                    [margin, margin],
+                    [w - margin, margin],
+                    [w - margin, h - margin],
+                    [margin, h - margin]
+                ])
+                self.save_settings()  # 자동 저장
+                print("✅ 호모그래피 핸들 리셋")
+            event.accept()
 
 
 class MainWindow(QMainWindow):
@@ -252,6 +517,15 @@ class MainWindow(QMainWindow):
         
         # 카메라 초기화
         self.setup_camera()
+        
+        # 버튼 상태 동기화 (저장된 설정 반영)
+        self._sync_button_states()
+    
+    def _sync_button_states(self):
+        """저장된 설정에 맞게 버튼 상태 동기화"""
+        if hasattr(self, 'handle_btn'):
+            status = "ON" if self.opengl_window.show_handles else "OFF"
+            self.handle_btn.setText(f"핸들: {status}")
     
     def _setup_ui(self):
         """UI 레이아웃 설정"""
@@ -284,7 +558,12 @@ class MainWindow(QMainWindow):
                 return None, None, None
             
             # 프롬프트 하드코딩 (current.txt 내용)
-            prompts = ["black steel cup", "bright paper towel", "white paper cup", "paper bottle with text"]
+            prompts = ["black steel cup", 
+                       "bright paper towel", 
+                       "white paper cup", 
+                       "paper bottle with text",
+                       "white paper cup with text",
+                       "transparent plastic bottle"]
             model_manager.update_prompt(prompts)
             
             # 추론 엔진
@@ -352,6 +631,11 @@ class MainWindow(QMainWindow):
         self.camera_feed_btn.clicked.connect(self.on_camera_feed_toggle)
         self.camera_feed_btn.setFixedWidth(self.BUTTON_WIDTH)
         button_layout.addWidget(self.camera_feed_btn)
+        
+        self.handle_btn = QPushButton("핸들: ON")
+        self.handle_btn.clicked.connect(self.on_handle_toggle)
+        self.handle_btn.setFixedWidth(self.BUTTON_WIDTH)
+        button_layout.addWidget(self.handle_btn)
         
         button_layout.addStretch()
         layout.addLayout(button_layout)
@@ -436,6 +720,14 @@ class MainWindow(QMainWindow):
             self.camera_feed_btn.setText(f"촬영화면: {status}")
             self.opengl_window._cache_key = None
             print(f"{'✅' if self.yolo_renderer.draw_camera_feed else '❌'} 촬영화면")
+    
+    def on_handle_toggle(self):
+        """핸들 표시/숨김 토글"""
+        self.opengl_window.show_handles = not self.opengl_window.show_handles
+        status = "ON" if self.opengl_window.show_handles else "OFF"
+        self.handle_btn.setText(f"핸들: {status}")
+        self.opengl_window.save_settings()  # 자동 저장
+        print(f"{'✅' if self.opengl_window.show_handles else '❌'} 핸들 표시")
     
     def on_model_changed(self, index):
         """모델 변경"""
